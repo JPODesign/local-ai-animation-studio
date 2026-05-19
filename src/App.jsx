@@ -618,6 +618,45 @@ function hitTestPart(p, worldX, worldY) {
   return lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h;
 }
 
+// World-space axis-aligned bounding box for a part. Transforms the four
+// corners of the part-local bounds through rotate + translate, then takes
+// the min/max — used for marquee selection (intersection vs. the curtain).
+function getPartWorldAabb(p) {
+  const local = p.src
+    ? { x: -p.w / 2, y: -p.h / 2, w: p.w, h: p.h }
+    : getShapeLocalBounds(p.type, p.w, p.h);
+  const rot = ((p.rot || 0) * Math.PI) / 180;
+  const cos = Math.cos(rot), sin = Math.sin(rot);
+  const xs = [], ys = [];
+  for (const c of [
+    { x: local.x,             y: local.y },
+    { x: local.x + local.w,   y: local.y },
+    { x: local.x,             y: local.y + local.h },
+    { x: local.x + local.w,   y: local.y + local.h },
+  ]) {
+    xs.push(c.x * cos - c.y * sin + p.x);
+    ys.push(c.x * sin + c.y * cos + p.y);
+  }
+  const minX = Math.min.apply(null, xs);
+  const maxX = Math.max.apply(null, xs);
+  const minY = Math.min.apply(null, ys);
+  const maxY = Math.max.apply(null, ys);
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function rectsIntersect(a, b) {
+  return !(a.x > b.x + b.w || a.x + a.w < b.x || a.y > b.y + b.h || a.y + a.h < b.y);
+}
+
+function normalizeRect(x0, y0, x1, y1) {
+  return {
+    x: Math.min(x0, x1),
+    y: Math.min(y0, y1),
+    w: Math.abs(x1 - x0),
+    h: Math.abs(y1 - y0),
+  };
+}
+
 // Draw a built-in stickman part CENTERED at the local origin (0, 0).
 // The caller has already translated to (p.x, p.y) and rotated around it,
 // so every shape here is symmetric about the origin and fills its
@@ -762,8 +801,9 @@ function StickmanBuilder() {
   const [libTab, setLibTab] = useState("head");
   const [frames, setFrames] = useState([{ id: crypto.randomUUID(), parts: defaultStickman() }]);
   const [active, setActive] = useState(0);
-  const [selected, setSelected] = useState(null);
-  const [drag, setDrag] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]); // array of selected part ids (multi-select)
+  const [drag, setDrag] = useState(null);              // { startX, startY, starts: { [id]: {x, y} } }
+  const [marquee, setMarquee] = useState(null);        // { x0, y0, x1, y1, additive } | null
   const [dragFrame, setDragFrame] = useState(null);
   const [fps, setFps] = useState(8);
   const [playing, setPlaying] = useState(false);
@@ -774,7 +814,7 @@ function StickmanBuilder() {
 
   const frame = frames[active];
 
-  const drawFrame = useCallback((ctx, f, selId) => {
+  const drawFrame = useCallback((ctx, f, selectedSet) => {
     f.parts.forEach(p => {
       ctx.save();
       ctx.translate(p.x, p.y);
@@ -783,7 +823,6 @@ function StickmanBuilder() {
         let im = imgCache.current.get(p.src);
         if (!im) {
           im = new Image();
-          im.onload = () => { /* trigger redraw via setSelected no-op is overkill; we rely on next state change */ };
           im.src = p.src;
           imgCache.current.set(p.src, im);
         }
@@ -792,7 +831,7 @@ function StickmanBuilder() {
       } else {
         drawBuiltinPart(ctx, p.type, p.w, p.h);
       }
-      if (selId === p.id) {
+      if (selectedSet && selectedSet.has(p.id)) {
         const b = getPartBounds(p);
         ctx.strokeStyle = "#a78bfa";
         ctx.setLineDash([4, 4]);
@@ -809,8 +848,24 @@ function StickmanBuilder() {
     const ctx = c.getContext("2d");
     ctx.clearRect(0, 0, W, H);
     if (onion && active > 0) { ctx.globalAlpha = 0.18; drawFrame(ctx, frames[active - 1]); ctx.globalAlpha = 1; }
-    drawFrame(ctx, frame, selected);
-  }, [frame, frames, active, onion, selected, drawFrame]);
+    const sel = new Set(selectedIds);
+    drawFrame(ctx, frame, sel);
+    // Marquee (curtain) selection rectangle — drawn above parts, below DOM controls.
+    if (marquee) {
+      const r = normalizeRect(marquee.x0, marquee.y0, marquee.x1, marquee.y1);
+      if (r.w > 0.5 && r.h > 0.5) {
+        ctx.save();
+        ctx.fillStyle = "rgba(167, 139, 250, 0.12)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = "#a78bfa";
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+  }, [frame, frames, active, onion, selectedIds, marquee, drawFrame]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -831,6 +886,43 @@ function StickmanBuilder() {
     return () => { cancelled = true; };
   }, [frames, draw]);
 
+  // Keyboard: arrow keys nudge selection, Delete/Backspace removes it.
+  // Ignored while the user is typing in an input/textarea/select so the
+  // prompt textarea and number fields keep working normally.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!selectedIds.length) return;
+      const el = document.activeElement;
+      const tag = el && el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el && el.isContentEditable)) return;
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        const ids = new Set(selectedIds);
+        setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.filter(p => !ids.has(p.id)) } : f));
+        setSelectedIds([]);
+        return;
+      }
+
+      const step = e.shiftKey ? 10 : 1; // hold Shift for 10px nudges
+      let dx = 0, dy = 0;
+      if      (e.key === "ArrowUp")    dy = -step;
+      else if (e.key === "ArrowDown")  dy =  step;
+      else if (e.key === "ArrowLeft")  dx = -step;
+      else if (e.key === "ArrowRight") dx =  step;
+      else return;
+
+      e.preventDefault(); // stop the page from scrolling
+      const ids = new Set(selectedIds);
+      setFrames(fs => fs.map((f, i) => {
+        if (i !== active) return f;
+        return { ...f, parts: f.parts.map(p => ids.has(p.id) ? { ...p, x: p.x + dx, y: p.y + dy } : p) };
+      }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedIds, active]);
+
   useEffect(() => {
     if (!playing) return;
     const id = setInterval(() => {
@@ -841,44 +933,175 @@ function StickmanBuilder() {
 
   const updatePart = (id, patch) =>
     setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.map(p => p.id === id ? { ...p, ...patch } : p) } : f));
-  const layerOp = (id, op) => setFrames(fs => fs.map((f, i) => {
-    if (i !== active) return f;
-    const idx = f.parts.findIndex(p => p.id === id); if (idx < 0) return f;
-    const arr = [...f.parts]; const [p] = arr.splice(idx, 1);
-    if (op === "forward")        arr.splice(Math.min(arr.length, idx + 1), 0, p);
-    else if (op === "back")      arr.splice(Math.max(0, idx - 1), 0, p);
-    else if (op === "duplicate") arr.splice(idx, 0, p, { ...p, id: crypto.randomUUID(), x: p.x + 15, y: p.y + 15 });
-    return { ...f, parts: arr };
-  }));
-  const deleteSelected = () => {
-    if (!selected) return;
-    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.filter(p => p.id !== selected) } : f));
-    setSelected(null);
+
+  // Slider helper: apply the delta (newValue - first-selected's current value) to
+  // EVERY selected part. For single selection this is identical to setting the
+  // value directly. For multi-selection it preserves the spread between parts.
+  const applyDelta = (key, newValue) => {
+    if (!selectedIds.length) return;
+    const first = frame.parts.find(p => p.id === selectedIds[0]);
+    if (!first) return;
+    const delta = newValue - (first[key] || 0);
+    if (delta === 0) return;
+    const idSet = new Set(selectedIds);
+    setFrames(fs => fs.map((f, i) => {
+      if (i !== active) return f;
+      return {
+        ...f,
+        parts: f.parts.map(p => {
+          if (!idSet.has(p.id)) return p;
+          if (key === "rot") return { ...p, rot: (p.rot || 0) + delta };
+          return { ...p, [key]: Math.max(10, (p[key] || 0) + delta) };
+        }),
+      };
+    }));
   };
+
+  // Move every selected part by (dx, dy). Used by arrow keys and group drag.
+  const moveSelectedBy = (dx, dy) => {
+    if (!selectedIds.length) return;
+    const idSet = new Set(selectedIds);
+    setFrames(fs => fs.map((f, i) => {
+      if (i !== active) return f;
+      return { ...f, parts: f.parts.map(p => idSet.has(p.id) ? { ...p, x: p.x + dx, y: p.y + dy } : p) };
+    }));
+  };
+
+  // Send all selected back / bring all selected forward.
+  // - Single selection → one step (preserves the original feel).
+  // - Multi selection  → group goes all the way to the back / front.
+  const layerOp = (op) => {
+    if (!selectedIds.length) return;
+    const idSet = new Set(selectedIds);
+    setFrames(fs => fs.map((f, i) => {
+      if (i !== active) return f;
+      if (selectedIds.length === 1) {
+        const id = selectedIds[0];
+        const idx = f.parts.findIndex(p => p.id === id);
+        if (idx < 0) return f;
+        const arr = [...f.parts]; const [p] = arr.splice(idx, 1);
+        if (op === "forward")   arr.splice(Math.min(arr.length, idx + 1), 0, p);
+        else if (op === "back") arr.splice(Math.max(0, idx - 1), 0, p);
+        return { ...f, parts: arr };
+      }
+      const selectedParts = f.parts.filter(p => idSet.has(p.id));
+      const rest          = f.parts.filter(p => !idSet.has(p.id));
+      if (op === "back")    return { ...f, parts: [...selectedParts, ...rest] };
+      if (op === "forward") return { ...f, parts: [...rest, ...selectedParts] };
+      return f;
+    }));
+  };
+
+  // Duplicate all selected parts (fresh IDs, offset +15px), then move selection
+  // onto the new copies so the user can immediately reposition them.
+  const duplicateSelected = () => {
+    if (!selectedIds.length) return;
+    const idSet = new Set(selectedIds);
+    const newIds = [];
+    setFrames(fs => fs.map((f, i) => {
+      if (i !== active) return f;
+      const copies = f.parts.filter(p => idSet.has(p.id)).map(p => {
+        const np = { ...p, id: crypto.randomUUID(), x: p.x + 15, y: p.y + 15 };
+        newIds.push(np.id);
+        return np;
+      });
+      return { ...f, parts: [...f.parts, ...copies] };
+    }));
+    if (newIds.length) setSelectedIds(newIds);
+  };
+
+  const deleteSelected = () => {
+    if (!selectedIds.length) return;
+    const idSet = new Set(selectedIds);
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.filter(p => !idSet.has(p.id)) } : f));
+    setSelectedIds([]);
+  };
+
   const addPart = (type, src = null, pos = null) => {
     const lib = library[type] || [];
     const finalSrc = src != null ? src : (lib.length ? lib[lib.length - 1].src : null);
     const np = { id: crypto.randomUUID(), type, x: pos ? pos.x : 300, y: pos ? pos.y : 250, w: 120, h: 120, rot: 0, src: finalSrc };
     setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: [...f.parts, np] } : f));
-    setSelected(np.id);
+    setSelectedIds([np.id]);
+  };
+
+  const canvasCoords = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (W / rect.width),
+      y: (e.clientY - rect.top)  * (H / rect.height),
+    };
   };
 
   const onMouseDown = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (W / rect.width);
-    const y = (e.clientY - rect.top) * (H / rect.height);
+    const { x, y } = canvasCoords(e);
     const hit = [...frame.parts].reverse().find(p => hitTestPart(p, x, y));
-    if (hit) { setSelected(hit.id); setDrag({ id: hit.id, dx: hit.x - x, dy: hit.y - y }); }
-    else setSelected(null);
+    if (hit) {
+      // Decide the new selection.
+      let nextSelected;
+      if (e.shiftKey) {
+        // Shift+click toggles membership; no drag (just adjusts selection).
+        nextSelected = selectedIds.includes(hit.id)
+          ? selectedIds.filter(id => id !== hit.id)
+          : [...selectedIds, hit.id];
+        setSelectedIds(nextSelected);
+        return;
+      }
+      if (!selectedIds.includes(hit.id)) {
+        // Clicking outside the current selection — replace it.
+        nextSelected = [hit.id];
+      } else {
+        // Clicking on an already-selected part — keep the whole group for drag.
+        nextSelected = selectedIds;
+      }
+      setSelectedIds(nextSelected);
+      // Record start positions for every selected part so they all move together.
+      const starts = {};
+      frame.parts.forEach(p => { if (nextSelected.includes(p.id)) starts[p.id] = { x: p.x, y: p.y }; });
+      setDrag({ startX: x, startY: y, starts });
+    } else {
+      // Click on empty canvas — start a marquee. Shift makes it additive.
+      if (!e.shiftKey) setSelectedIds([]);
+      setMarquee({ x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey });
+    }
   };
+
   const onMouseMove = (e) => {
-    if (!drag) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (W / rect.width);
-    const y = (e.clientY - rect.top) * (H / rect.height);
-    updatePart(drag.id, { x: x + drag.dx, y: y + drag.dy });
+    if (!drag && !marquee) return;
+    const { x, y } = canvasCoords(e);
+    if (drag) {
+      const dx = x - drag.startX;
+      const dy = y - drag.startY;
+      setFrames(fs => fs.map((f, i) => {
+        if (i !== active) return f;
+        return {
+          ...f,
+          parts: f.parts.map(p => drag.starts[p.id]
+            ? { ...p, x: drag.starts[p.id].x + dx, y: drag.starts[p.id].y + dy }
+            : p),
+        };
+      }));
+    } else if (marquee) {
+      setMarquee(m => m && { ...m, x1: x, y1: y });
+    }
   };
-  const onMouseUp = () => setDrag(null);
+
+  const onMouseUp = () => {
+    if (marquee) {
+      const r = normalizeRect(marquee.x0, marquee.y0, marquee.x1, marquee.y1);
+      // Treat anything bigger than 3px as an intentional marquee drag.
+      if (r.w > 3 || r.h > 3) {
+        const hits = frame.parts
+          .filter(p => rectsIntersect(getPartWorldAabb(p), r))
+          .map(p => p.id);
+        setSelectedIds(prev => marquee.additive
+          ? Array.from(new Set([...prev, ...hits]))
+          : hits);
+      }
+      setMarquee(null);
+    }
+    setDrag(null);
+  };
   const onDragOver = (e) => { if (e.dataTransfer.types.includes("application/x-laias-part")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } };
   const onDrop = (e) => {
     const raw = e.dataTransfer.getData("application/x-laias-part");
@@ -919,7 +1142,7 @@ function StickmanBuilder() {
 
   const addFrame = () => {
     setFrames(fs => [...fs.slice(0, active + 1), { id: crypto.randomUUID(), parts: [] }, ...fs.slice(active + 1)]);
-    setActive(a => a + 1); setSelected(null);
+    setActive(a => a + 1); setSelectedIds([]);
   };
   const duplicateFrame = () => {
     setFrames(fs => {
@@ -927,12 +1150,12 @@ function StickmanBuilder() {
       const copy = { id: crypto.randomUUID(), parts: src.parts.map(p => ({ ...p, id: crypto.randomUUID() })) };
       return [...fs.slice(0, active + 1), copy, ...fs.slice(active + 1)];
     });
-    setActive(a => a + 1); setSelected(null);
+    setActive(a => a + 1); setSelectedIds([]);
   };
   const deleteFrame = () => {
     if (frames.length <= 1) return;
     setFrames(fs => fs.filter((_, i) => i !== active));
-    setActive(a => Math.max(0, a - 1)); setSelected(null);
+    setActive(a => Math.max(0, a - 1)); setSelectedIds([]);
   };
   const moveFrame = (from, to) => {
     if (from === to || from < 0 || to < 0 || from >= frames.length || to >= frames.length) return;
@@ -970,7 +1193,7 @@ function StickmanBuilder() {
       });
       out.push({ id: crypto.randomUUID(), parts });
     }
-    setFrames(out); setActive(0); setSelected(null);
+    setFrames(out); setActive(0); setSelectedIds([]);
   };
 
   const savePreset = () => {
@@ -1047,7 +1270,8 @@ function StickmanBuilder() {
     gif.render();
   };
 
-  const sel = frame.parts.find(p => p.id === selected);
+  // First-selected part (used to seed slider current values).
+  const sel = selectedIds.length ? frame.parts.find(p => p.id === selectedIds[0]) : null;
   const totalAssets = Object.values(library).reduce((n, a) => n + (a ? a.length : 0), 0);
 
   return (
@@ -1146,18 +1370,26 @@ function StickmanBuilder() {
 
           {sel ? (
             <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-              <label className="text-xs text-slate-300">Width <input type="range" min="10" max="400" value={sel.w} onChange={e => updatePart(sel.id, { w: +e.target.value })} className="w-full" /></label>
-              <label className="text-xs text-slate-300">Height <input type="range" min="10" max="400" value={sel.h} onChange={e => updatePart(sel.id, { h: +e.target.value })} className="w-full" /></label>
-              <label className="text-xs text-slate-300">Rotation <input type="range" min="-180" max="180" value={sel.rot} onChange={e => updatePart(sel.id, { rot: +e.target.value })} className="w-full" /></label>
+              <label className="text-xs text-slate-300">Width <input type="range" min="10" max="400" value={sel.w} onChange={e => applyDelta("w", +e.target.value)} className="w-full" /></label>
+              <label className="text-xs text-slate-300">Height <input type="range" min="10" max="400" value={sel.h} onChange={e => applyDelta("h", +e.target.value)} className="w-full" /></label>
+              <label className="text-xs text-slate-300">Rotation <input type="range" min="-180" max="180" value={sel.rot} onChange={e => applyDelta("rot", +e.target.value)} className="w-full" /></label>
               <div className="flex flex-wrap items-end gap-1">
-                <GhostBtn onClick={() => layerOp(sel.id, "back")}>Send Back</GhostBtn>
-                <GhostBtn onClick={() => layerOp(sel.id, "forward")}>Bring Forward</GhostBtn>
-                <GhostBtn onClick={() => layerOp(sel.id, "duplicate")}>Duplicate</GhostBtn>
+                <GhostBtn onClick={() => layerOp("back")}>Send Back</GhostBtn>
+                <GhostBtn onClick={() => layerOp("forward")}>Bring Forward</GhostBtn>
+                <GhostBtn onClick={duplicateSelected}>Duplicate</GhostBtn>
                 <DangerBtn onClick={deleteSelected}>Delete</DangerBtn>
               </div>
+              {selectedIds.length > 1 && (
+                <div className="col-span-2 md:col-span-4 flex items-center justify-between text-xs">
+                  <span className="text-cyan-300 font-medium">{selectedIds.length} parts selected</span>
+                  <span className="text-slate-400">Sliders apply to all · arrow keys to nudge (Shift+arrow = 10px)</span>
+                </div>
+              )}
             </div>
           ) : (
-            <p className="text-xs text-slate-400 mt-3">Click a part on the canvas to select it. Drag to move. Use sliders to resize / rotate.</p>
+            <p className="text-xs text-slate-400 mt-3">
+              Click a part to select it. <span className="text-slate-300">Shift+click</span> adds/removes. Drag from empty space to marquee-select. Arrow keys nudge (Shift = 10px). Delete to remove.
+            </p>
           )}
 
           <InnerCard className="mt-4 p-3">
@@ -1195,7 +1427,7 @@ function StickmanBuilder() {
                   onDragOver={(e) => { if (e.dataTransfer.types.includes("application/x-laias-frame")) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                   onDrop={(e) => { const raw = e.dataTransfer.getData("application/x-laias-frame"); if (!raw) return; e.preventDefault(); const from = parseInt(raw, 10); if (!isNaN(from)) moveFrame(from, i); setDragFrame(null); }}
                   onDragEnd={() => setDragFrame(null)}
-                  onClick={() => { setActive(i); setSelected(null); }}
+                  onClick={() => { setActive(i); setSelectedIds([]); }}
                   style={{ width: 120, height: 78 }}
                   className={"shrink-0 relative rounded-lg border-2 cursor-pointer overflow-hidden transition " +
                     (i === active ? "border-violet-400 shadow-lg shadow-violet-500/40" : "border-white/10 hover:border-white/30") +
