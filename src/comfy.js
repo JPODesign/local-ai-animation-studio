@@ -1,5 +1,5 @@
 /* =============================================================================
- * Local AI Animation Studio — ComfyUI Backend Connector
+ * Animiko — ComfyUI Backend Connector
  * -----------------------------------------------------------------------------
  * The ONLY module that talks to a local ComfyUI server. Every HTTP call targets
  * the user-provided local backend URL (default http://localhost:8188).

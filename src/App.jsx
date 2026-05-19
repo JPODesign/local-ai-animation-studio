@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import ComfyClient, { testConnection as comfyTest, generate as comfyGenerate, isApiFormat, DEFAULT_URL } from "./comfy.js";
 
 /* ============================================================================
- * LOCAL AI ANIMATION STUDIO — premium glassmorphism dashboard
+ * ANIMIKO — premium glassmorphism AI animation studio
  *   • React 18 + Vite + Tailwind v3
  *   • No external UI libraries (no shadcn/ui, no Radix, no Headless UI).
  *   • Every primitive (Card, Button, Tabs, Modal, Input) is hand-built here.
@@ -73,7 +73,7 @@ function Navbar({ theme, setTheme, onOpenSettings }) {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-900/50">L</div>
           <div className="leading-tight">
-            <div className="font-semibold text-white">Local AI Animation Studio</div>
+            <div className="font-semibold text-white">Animiko</div>
             <div className="text-xs text-slate-400">Frontend-first · Demo Mode</div>
           </div>
         </div>
@@ -108,7 +108,7 @@ function Hero() {
         <Badge tone="emerald">No paid API required if running locally</Badge>
       </div>
       <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
-        <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-fuchsia-300 to-cyan-300">AI Animation Generator</span>
+        <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-fuchsia-300 to-cyan-300">Animiko</span>
       </h1>
       <p className="mt-3 text-slate-300 max-w-3xl">Create animations using uploaded assets, stickman parts, frame-by-frame sprites, and future local AI video generation.</p>
       <p className="mt-1 text-xs text-slate-400">Performance depends entirely on your computer hardware when running locally.</p>
@@ -1139,7 +1139,7 @@ export default function App() {
         <LocalAISetup onOpenSettings={() => setOpenSettings(true)} />
         <footer className="border-t border-white/10 mt-6">
           <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
-            <div>© Local AI Animation Studio · Frontend-only build · No data leaves your browser.</div>
+            <div>© Animiko · Frontend-only build · No data leaves your browser.</div>
             <div className="flex gap-2">
               <Badge tone="violet">Demo Mode</Badge>
               <Badge tone="cyan">Local AI: Coming Soon</Badge>

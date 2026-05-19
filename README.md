@@ -1,6 +1,6 @@
-# Local AI Animation Studio
+# Animiko
 
-A glassmorphism dark-theme dashboard for creating animations in the browser. Includes a hand-built stickman asset builder (drag-drop, resize, rotate, frame-by-frame timeline, export as transparent PNG / sprite sheet / animated GIF) and a ComfyUI backend connector for future local AI video generation.
+A glassmorphism dark-theme AI animation studio that runs in the browser. Includes a hand-built stickman asset builder (drag-drop, resize, rotate, frame-by-frame timeline, export as transparent PNG / sprite sheet / animated GIF) and a ComfyUI backend connector for future local AI video generation.
 
 Frontend-first. Runs entirely in the user's browser. No paid APIs. No Supabase. No backend required for the core features.
 

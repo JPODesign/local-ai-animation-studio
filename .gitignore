@@ -15,3 +15,5 @@ dist-ssr
 
 # unrelated nested project
 Animiko/
+
+.vercel
