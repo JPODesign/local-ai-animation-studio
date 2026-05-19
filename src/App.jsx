@@ -137,6 +137,7 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
+  const [errorMessage, setErrorMessage] = useState(null);  // Local AI backend / generation error shown in the result panel
   // Single uploaded media item per spec: { file, name, type, url } | null
   const [uploaded, setUploaded] = useState(null);
 
@@ -155,8 +156,6 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
       if (prev && prev.url) { try { URL.revokeObjectURL(prev.url); } catch (_) {} }
       return null;
     });
-    // If the current result is built from this upload, clear it too.
-    setResult(prev => (prev && prev.kind === "user") ? null : prev);
   };
   const magic = () => {
     const ideas = [
@@ -169,43 +168,53 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
   };
 
   const generate = async () => {
+    setErrorMessage(null); // wipe any previous error on a fresh attempt
+
+    // ---------- DEMO MODE ----------
+    // Never claims real generation. Demo result is clearly labelled.
     if (model === "demo") {
       setBusy(true); setStage("rendering demo"); setResult(null);
       await new Promise(r => setTimeout(r, 3000));
       setBusy(false); setStage("");
-      // Demo Mode: when an upload exists, the MediaPreview already wins the
-      // render priority — just mark a "user" result so the "Generated" badge
-      // shows. When there's no upload, fall back to the demo placeholder.
-      if (uploaded) {
-        setResult({ kind: "user", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
-      } else {
-        setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
-      }
+      setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
       return;
     }
-    if (!settings.workflow) {
-      alert(
-        "No ComfyUI workflow loaded yet.\n\n" +
-        "1. Open Settings (gear icon) → Local AI.\n" +
-        "2. Set the backend URL (default http://localhost:8188).\n" +
-        '3. Upload a workflow JSON exported via "Save (API Format)".\n\n' +
-        "Demo Mode keeps working without any of this."
+
+    // ---------- LOCAL AI MODE ----------
+    // Never falls back to the demo city. Either succeeds, or shows an
+    // explicit error in the Animation Results panel with prompt + upload.
+    if (!settings.workflow || !settings.backendUrl) {
+      setResult(null);
+      setErrorMessage(
+        "Local AI backend is not connected. Start ComfyUI locally, then connect it in Local AI Setup.\n\n" +
+        (!settings.backendUrl ? "Missing backend URL. " : "") +
+        (!settings.workflow   ? "No workflow JSON loaded — open Settings → Local AI to upload one." : "")
       );
-      onOpenSettings && onOpenSettings();
       return;
     }
+
     setBusy(true); setStage("connecting"); setResult(null);
     try {
       const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
+      // ===== ACTUAL CALL TO THE LOCAL BACKEND =====
+      // (see src/comfy.js for the connector; this turns into a /prompt POST
+      // when ComfyUI is reachable on settings.backendUrl)
       const out = await comfyGenerate({
         backendUrl: settings.backendUrl,
-        workflow: settings.workflow,
-        prompt, imageFile: imgFile,
+        workflow:   settings.workflow,
+        prompt,
+        imageFile:  imgFile,
         onProgress: ({ stage }) => setStage(stage || ""),
       });
       setResult({ kind: "comfy", outputs: out.outputs, prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
     } catch (e) {
-      alert("Local AI generation failed:\n\n" + (e.message || e) + "\n\nTip: Switch back to Demo Mode while you set up ComfyUI.");
+      const msg = (e && e.message) || String(e);
+      const isConnectionError = msg.indexOf("Cannot reach ComfyUI") >= 0 || msg.indexOf("Failed to fetch") >= 0;
+      setErrorMessage(
+        isConnectionError
+          ? "Local AI backend is not connected. Start ComfyUI locally, then connect it in Local AI Setup.\n\n" + msg
+          : "Local AI generation failed:\n\n" + msg
+      );
     } finally {
       setBusy(false); setStage("");
     }
@@ -319,25 +328,32 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
         <InnerCard className="overflow-hidden">
           <div className="canvas-bg aspect-video flex items-center justify-center">
             {busy ? (
-              <div className="text-center">
-                <div className="w-10 h-10 mx-auto mb-3 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
-                <div className="text-slate-200">{stage ? "Local AI: " + stage + "…" : "Rendering demo result…"}</div>
-                <div className="text-xs text-slate-400 mt-1">{model === "demo" ? "Demo Mode" : "Talking to local ComfyUI backend"}</div>
-              </div>
+              <BusyLoader model={model} stage={stage} prompt={prompt} />
+            ) : errorMessage ? (
+              /* Local AI failure — replaces the panel. NEVER falls back to
+                 a demo city. Shows the error, the prompt, and the upload
+                 (if any) so the user can correct course. */
+              <LocalAIErrorView
+                message={errorMessage}
+                prompt={prompt}
+                uploaded={uploaded}
+                onRemoveUpload={removeUpload}
+              />
+            ) : result && result.kind === "comfy" ? (
+              /* PRIORITY 1: real generated output from the local backend
+                 wins over uploaded input. */
+              <ComfyResult result={result} />
             ) : uploaded ? (
-              /* PRIORITY 1: uploaded media always wins — over demo city,
-                 sample previews, or any other hardcoded placeholder. */
+              /* PRIORITY 2: uploaded media preview. */
               <MediaPreview
                 uploaded={uploaded}
                 onRemove={removeUpload}
                 prompt={prompt}
-                badge={result ? "Generated" : null}
+                badge={result ? "Generated · Demo Mode" : null}
               />
-            ) : result && result.kind === "comfy" ? (
-              /* PRIORITY 2: real generated result from the local backend. */
-              <ComfyResult result={result} />
-            ) : result && result.kind === "demo" ? (
-              /* Demo placeholder — ONLY reachable when no upload exists. */
+            ) : result && result.kind === "demo" && model === "demo" ? (
+              /* Demo placeholder — ONLY when Demo Mode is selected AND no
+                 upload exists. Local AI modes can never reach this branch. */
               <DemoResult result={result} />
             ) : (
               /* PRIORITY 3 + 4: prompt placeholder / empty state. */
@@ -455,6 +471,64 @@ function CleanPlaceholder({ hasPrompt, prompt }) {
   );
 }
 
+// Loading view shown during the 3-second demo render OR while waiting on
+// the local AI backend. Model-aware copy: Demo Mode says "no GPU used",
+// Local AI says "Sending prompt to local AI backend…".
+function BusyLoader({ model, stage, prompt }) {
+  const isDemo = model === "demo";
+  return (
+    <div className="text-center p-6 max-w-md">
+      <div className="w-10 h-10 mx-auto mb-3 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
+      <div className="text-slate-200">
+        {isDemo ? (stage || "Rendering demo result…") : "Sending prompt to local AI backend…"}
+      </div>
+      <div className={"text-xs mt-1 " + (isDemo ? "text-amber-200/80" : "text-slate-400")}>
+        {isDemo ? "Demo Mode — no GPU used, no real generation" : (stage || "Talking to ComfyUI…")}
+      </div>
+      {prompt && prompt.trim() && (
+        <div className="text-xs text-slate-400 mt-3 italic line-clamp-3">“{prompt}”</div>
+      )}
+    </div>
+  );
+}
+
+// Local AI backend / generation error. Replaces the canvas content so the
+// user CANNOT see a demo placeholder while in Local AI mode. Still shows
+// the prompt and the uploaded media (with X to remove) so they have context.
+function LocalAIErrorView({ message, prompt, uploaded, onRemoveUpload }) {
+  const showUpload = !!uploaded;
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 text-center overflow-auto">
+      <div className="rounded-xl bg-rose-500/15 border border-rose-400/40 px-4 py-3 max-w-md text-left">
+        <div className="font-semibold text-rose-100 mb-1">⚠ Local AI backend not connected</div>
+        <div className="text-xs text-rose-200/90 whitespace-pre-wrap">{message}</div>
+      </div>
+      {showUpload && (
+        <div className="relative w-36 h-24 rounded-lg overflow-hidden border border-white/10 bg-black/30">
+          {((uploaded.type && uploaded.type.startsWith("image/")) || /\.gif$/i.test(uploaded.name || "")) ? (
+            <img src={uploaded.url} alt={uploaded.name} className="w-full h-full object-contain" />
+          ) : (uploaded.type && uploaded.type.startsWith("video/")) ? (
+            <video src={uploaded.url} className="w-full h-full object-contain" muted />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-300 px-1 truncate">{uploaded.name}</div>
+          )}
+          <button
+            onClick={onRemoveUpload}
+            title="Remove uploaded media"
+            aria-label="Remove uploaded media"
+            className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/80 hover:bg-rose-500 text-white text-xs flex items-center justify-center"
+          >×</button>
+        </div>
+      )}
+      {prompt && prompt.trim() && (
+        <div className="text-xs text-slate-300 max-w-md whitespace-pre-wrap">
+          <span className="text-cyan-300 font-medium mr-1">prompt:</span><span className="italic">{prompt}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DemoResult({ result }) {
   return (
     <div className="w-full h-full relative overflow-hidden">
@@ -469,7 +543,12 @@ function DemoResult({ result }) {
       <div className="absolute top-6 left-0 right-0" style={{ animation: "drift 9s linear infinite" }}>
         <div className="text-3xl">☁️</div>
       </div>
-      <div className="absolute top-3 right-3"><Badge tone="violet">Demo Mode</Badge></div>
+      <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2">
+        <div className="bg-amber-500/20 border border-amber-400/40 text-amber-100 text-[11px] px-2 py-1 rounded backdrop-blur">
+          Demo Mode · not real AI · no GPU used
+        </div>
+        <Badge tone="violet">Demo</Badge>
+      </div>
       <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between">
         <div className="truncate"><span className="text-slate-400">{result.style}</span> · {result.prompt}</div>
         <div className="text-slate-400">{result.generatedAt}</div>
