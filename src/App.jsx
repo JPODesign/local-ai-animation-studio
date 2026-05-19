@@ -374,45 +374,134 @@ function ComfyResult({ result }) {
 const PART_TYPES = ["head", "eyes", "eyebrows", "nose", "ears", "mouth", "body", "arms", "legs", "feet"];
 const PRESETS = ["run", "walk", "wave", "eat", "angry stomp", "flex muscles", "jump", "dance", "point"];
 
+// Stroke width for every built-in shape. Single source of truth so the
+// bounds helper can account for the extra pixels the stroke paints
+// outside the geometric edge.
+const PART_STROKE = 4;
+
+// Reusable bounds helper.
+// Convention: every part stores its TRUE CENTER as (p.x, p.y). The caller
+// translates to that point and rotates around it, so this returns the box
+// in part-local coordinates centered on (0, 0). Includes:
+//   - the part's own w × h
+//   - stroke width (so a stroked line isn't clipped by the box)
+//   - a small visual padding so the box doesn't hug the geometry too tightly
+// Same function powers: selection rectangle, hit-testing, library thumbnails.
+function getPartBounds(p, padding = 6) {
+  const stroke = p.src ? 0 : PART_STROKE; // uploaded images have no stroke
+  const w = p.w + stroke + padding * 2;
+  const h = p.h + stroke + padding * 2;
+  return { x: -w / 2, y: -h / 2, w, h };
+}
+
+// Hit-test rectangle (no padding — we want clicks to land on the real shape).
+function getPartHitBox(p) {
+  const stroke = p.src ? 0 : PART_STROKE;
+  return { w: p.w + stroke, h: p.h + stroke };
+}
+
+// Draw a built-in stickman part CENTERED at the local origin (0, 0).
+// The caller has already translated to (p.x, p.y) and rotated around it,
+// so every shape here is symmetric about the origin and fills its
+// w × h bounding box. NO internal translate.
 function drawBuiltinPart(ctx, type, w, h) {
   ctx.save();
-  ctx.lineWidth = 4;
+  ctx.lineWidth = PART_STROKE;
+  ctx.lineCap = "round";
   ctx.strokeStyle = "#e2e8f0";
   ctx.fillStyle = "#e2e8f0";
-  ctx.translate(w / 2, h / 2);
-  const s = Math.min(w, h);
+
+  // Half-extents shrunk by half the stroke so the painted stroke stays
+  // inside the bounding box.
+  const hw = Math.max(1, (w - PART_STROKE) / 2);
+  const hh = Math.max(1, (h - PART_STROKE) / 2);
+
   switch (type) {
-    case "head":     ctx.beginPath(); ctx.arc(0,0,s*0.4,0,Math.PI*2); ctx.stroke(); break;
-    case "eyes":     ctx.beginPath(); ctx.arc(-s*0.15,0,s*0.06,0,Math.PI*2); ctx.fill();
-                     ctx.beginPath(); ctx.arc( s*0.15,0,s*0.06,0,Math.PI*2); ctx.fill(); break;
-    case "eyebrows": ctx.beginPath(); ctx.moveTo(-s*0.25,0); ctx.lineTo(-s*0.05,-s*0.1); ctx.stroke();
-                     ctx.beginPath(); ctx.moveTo( s*0.05,-s*0.1); ctx.lineTo( s*0.25,0); ctx.stroke(); break;
-    case "nose":     ctx.beginPath(); ctx.moveTo(0,-s*0.2); ctx.lineTo(-s*0.08,s*0.1); ctx.lineTo(s*0.08,s*0.1); ctx.closePath(); ctx.stroke(); break;
-    case "ears":     ctx.beginPath(); ctx.arc(-s*0.4,0,s*0.12,0,Math.PI*2); ctx.stroke();
-                     ctx.beginPath(); ctx.arc( s*0.4,0,s*0.12,0,Math.PI*2); ctx.stroke(); break;
-    case "mouth":    ctx.beginPath(); ctx.arc(0,-s*0.05,s*0.25,0.1*Math.PI,0.9*Math.PI); ctx.stroke(); break;
-    case "body":     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo(0,s*0.4); ctx.stroke(); break;
-    case "arms":     ctx.beginPath(); ctx.moveTo(-s*0.4,0); ctx.lineTo(s*0.4,0); ctx.stroke(); break;
-    case "legs":     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo(-s*0.3,s*0.4); ctx.stroke();
-                     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo( s*0.3,s*0.4); ctx.stroke(); break;
-    case "feet":     ctx.beginPath(); ctx.ellipse(-s*0.2,0,s*0.18,s*0.06,0,0,Math.PI*2); ctx.stroke();
-                     ctx.beginPath(); ctx.ellipse( s*0.2,0,s*0.18,s*0.06,0,0,Math.PI*2); ctx.stroke(); break;
-    default:         ctx.strokeRect(-s*0.3,-s*0.3,s*0.6,s*0.6);
+    case "head":
+      ctx.beginPath();
+      ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      break;
+
+    case "eyes": {
+      const r = Math.min(hw, hh) * 0.45;
+      ctx.beginPath(); ctx.arc(-hw * 0.45, 0, r, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc( hw * 0.45, 0, r, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+
+    case "eyebrows":
+      ctx.beginPath(); ctx.moveTo(-hw,        hh * 0.5); ctx.lineTo(-hw * 0.1, -hh * 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo( hw * 0.1, -hh * 0.5); ctx.lineTo( hw,        hh * 0.5); ctx.stroke();
+      break;
+
+    case "nose":
+      ctx.beginPath();
+      ctx.moveTo(0, -hh);
+      ctx.lineTo(-hw,  hh);
+      ctx.lineTo( hw,  hh);
+      ctx.closePath();
+      ctx.stroke();
+      break;
+
+    case "ears": {
+      const er = Math.min(hw * 0.5, hh);
+      ctx.beginPath(); ctx.ellipse(-hw + er, 0, er, hh, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse( hw - er, 0, er, hh, 0, 0, Math.PI * 2); ctx.stroke();
+      break;
+    }
+
+    case "mouth":
+      ctx.beginPath();
+      ctx.ellipse(0, -hh * 0.2, hw, Math.max(hh, 4), 0, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+      break;
+
+    case "body":
+      ctx.beginPath();
+      ctx.moveTo(0, -hh);
+      ctx.lineTo(0,  hh);
+      ctx.stroke();
+      break;
+
+    case "arms":
+      ctx.beginPath();
+      ctx.moveTo(-hw, 0);
+      ctx.lineTo( hw, 0);
+      ctx.stroke();
+      break;
+
+    case "legs":
+      ctx.beginPath(); ctx.moveTo(0, -hh); ctx.lineTo(-hw,  hh); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -hh); ctx.lineTo( hw,  hh); ctx.stroke();
+      break;
+
+    case "feet": {
+      const fw = hw * 0.45;
+      ctx.beginPath(); ctx.ellipse(-hw + fw, 0, fw, hh, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse( hw - fw, 0, fw, hh, 0, 0, Math.PI * 2); ctx.stroke();
+      break;
+    }
+
+    default:
+      ctx.strokeRect(-hw, -hh, hw * 2, hh * 2);
   }
   ctx.restore();
 }
 
 function defaultStickman() {
   const u = () => crypto.randomUUID();
+  // (x, y) is the TRUE visual CENTER of each part. The canvas pipeline does:
+  //   translate(p.x, p.y) → rotate(p.rot) → drawBuiltinPart  → centered art
   return [
-    { id: u(), type: "body",     x: 300, y: 240, w:   8, h: 160, rot: 0, src: null },
-    { id: u(), type: "head",     x: 300, y: 140, w:  80, h:  80, rot: 0, src: null },
-    { id: u(), type: "eyes",     x: 300, y: 135, w:  60, h:  30, rot: 0, src: null },
-    { id: u(), type: "eyebrows", x: 300, y: 120, w:  60, h:  20, rot: 0, src: null },
-    { id: u(), type: "mouth",    x: 300, y: 155, w:  40, h:  30, rot: 0, src: null },
-    { id: u(), type: "arms",     x: 300, y: 240, w: 160, h:   8, rot: 0, src: null },
-    { id: u(), type: "legs",     x: 300, y: 360, w: 100, h: 120, rot: 0, src: null },
-    { id: u(), type: "feet",     x: 300, y: 430, w: 100, h:  14, rot: 0, src: null },
+    { id: u(), type: "body",     x: 300, y: 270, w:   4, h: 140, rot: 0, src: null },
+    { id: u(), type: "head",     x: 300, y: 160, w:  80, h:  80, rot: 0, src: null },
+    { id: u(), type: "eyebrows", x: 300, y: 140, w:  50, h:  10, rot: 0, src: null },
+    { id: u(), type: "eyes",     x: 300, y: 155, w:  44, h:  10, rot: 0, src: null },
+    { id: u(), type: "mouth",    x: 300, y: 182, w:  34, h:  12, rot: 0, src: null },
+    { id: u(), type: "arms",     x: 300, y: 240, w: 140, h:   4, rot: 0, src: null },
+    { id: u(), type: "legs",     x: 300, y: 380, w:  80, h:  80, rot: 0, src: null },
+    { id: u(), type: "feet",     x: 300, y: 426, w:  90, h:  14, rot: 0, src: null },
   ];
 }
 
@@ -480,9 +569,11 @@ function StickmanBuilder() {
         drawBuiltinPart(ctx, p.type, p.w, p.h);
       }
       if (selId === p.id) {
+        const b = getPartBounds(p);
         ctx.strokeStyle = "#a78bfa";
-        ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
-        ctx.strokeRect(-p.w / 2 - 4, -p.h / 2 - 4, p.w + 8, p.h + 8);
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
         ctx.setLineDash([]);
       }
       ctx.restore();
@@ -552,7 +643,10 @@ function StickmanBuilder() {
     const rect = canvasRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (W / rect.width);
     const y = (e.clientY - rect.top) * (H / rect.height);
-    const hit = [...frame.parts].reverse().find(p => Math.abs(x - p.x) < p.w / 2 && Math.abs(y - p.y) < p.h / 2);
+    const hit = [...frame.parts].reverse().find(p => {
+      const hb = getPartHitBox(p);
+      return Math.abs(x - p.x) < hb.w / 2 && Math.abs(y - p.y) < hb.h / 2;
+    });
     if (hit) { setSelected(hit.id); setDrag({ id: hit.id, dx: hit.x - x, dy: hit.y - y }); }
     else setSelected(null);
   };
