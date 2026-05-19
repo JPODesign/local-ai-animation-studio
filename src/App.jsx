@@ -1,0 +1,1155 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import ComfyClient, { testConnection as comfyTest, generate as comfyGenerate, isApiFormat, DEFAULT_URL } from "./comfy.js";
+
+/* ============================================================================
+ * LOCAL AI ANIMATION STUDIO — premium glassmorphism dashboard
+ *   • React 18 + Vite + Tailwind v3
+ *   • No external UI libraries (no shadcn/ui, no Radix, no Headless UI).
+ *   • Every primitive (Card, Button, Tabs, Modal, Input) is hand-built here.
+ *   • Demo Mode always works. Local AI Mode requires ComfyUI running on the
+ *     user's OWN computer.
+ * ==========================================================================*/
+
+/* ---------- GLASS DESIGN PRIMITIVES ---------- */
+const Card = ({ children, className = "" }) => (
+  <div className={"bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-[0_0_40px_rgba(139,92,246,0.15)] p-5 " + className}>
+    {children}
+  </div>
+);
+
+const InnerCard = ({ children, className = "" }) => (
+  <div className={"bg-slate-900/50 border border-slate-700/50 rounded-xl " + className}>{children}</div>
+);
+
+const Badge = ({ children, tone = "violet" }) => {
+  const tones = {
+    violet:  "bg-violet-500/15 text-violet-200 border-violet-400/40",
+    cyan:    "bg-cyan-500/15 text-cyan-200 border-cyan-400/40",
+    amber:   "bg-amber-500/15 text-amber-200 border-amber-400/40",
+    emerald: "bg-emerald-500/15 text-emerald-200 border-emerald-400/40",
+    rose:    "bg-rose-500/15 text-rose-200 border-rose-400/40",
+    slate:   "bg-white/5 text-slate-200 border-white/10",
+  };
+  return (
+    <span className={"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border " + (tones[tone] || tones.slate)}>
+      {children}
+    </span>
+  );
+};
+
+const PrimaryBtn = ({ children, className = "", ...p }) => (
+  <button {...p} className={"inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 shadow-lg shadow-violet-900/40 disabled:opacity-50 disabled:cursor-not-allowed transition " + className}>
+    {children}
+  </button>
+);
+
+const SecondaryBtn = ({ children, className = "", ...p }) => (
+  <button {...p} className={"inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-white bg-white/15 border border-white/25 hover:bg-white/25 hover:border-white/40 shadow-sm shadow-black/20 disabled:opacity-50 transition " + className}>
+    {children}
+  </button>
+);
+
+const GhostBtn = ({ children, className = "", ...p }) => (
+  <button {...p} className={"inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-white bg-white/10 border border-white/20 hover:bg-white/20 hover:border-white/30 disabled:opacity-50 transition " + className}>
+    {children}
+  </button>
+);
+
+const DangerBtn = ({ children, className = "", ...p }) => (
+  <button {...p} className={"inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-rose-200 bg-rose-500/15 border border-rose-400/30 hover:bg-rose-500/25 disabled:opacity-50 transition " + className}>
+    {children}
+  </button>
+);
+
+const inputCls = "w-full bg-black/30 border border-white/10 rounded-lg p-2 text-white placeholder:text-slate-500 focus:border-violet-400/50 focus:outline-none transition";
+
+/* ============================================================================
+ * Navbar
+ * ==========================================================================*/
+function Navbar({ theme, setTheme, onOpenSettings }) {
+  return (
+    <header className="sticky top-0 z-30 bg-slate-950/60 backdrop-blur-xl border-b border-white/10">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-900/50">L</div>
+          <div className="leading-tight">
+            <div className="font-semibold text-white">Local AI Animation Studio</div>
+            <div className="text-xs text-slate-400">Frontend-first · Demo Mode</div>
+          </div>
+        </div>
+        <nav className="hidden md:flex items-center gap-1 text-sm">
+          {["Studio", "Stickman", "Local AI"].map(s => (
+            <a key={s} href={"#" + s.toLowerCase().replace(" ", "-")} className="px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">
+              {s}
+            </a>
+          ))}
+        </nav>
+        <div className="flex items-center gap-2">
+          <SecondaryBtn onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle theme">{theme === "dark" ? "☀" : "🌙"}</SecondaryBtn>
+          <SecondaryBtn onClick={onOpenSettings} title="Settings">⚙</SecondaryBtn>
+          <SecondaryBtn className="hidden sm:inline-flex">Login</SecondaryBtn>
+          <PrimaryBtn className="px-3 py-2">Discord</PrimaryBtn>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ============================================================================
+ * Hero
+ * ==========================================================================*/
+function Hero() {
+  return (
+    <section className="max-w-7xl mx-auto px-4 md:px-6 pt-10 pb-6">
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Badge tone="violet">Demo Mode</Badge>
+        <Badge tone="cyan">Local AI Mode: Coming Soon</Badge>
+        <Badge tone="amber">Requires local GPU setup</Badge>
+        <Badge tone="emerald">No paid API required if running locally</Badge>
+      </div>
+      <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
+        <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-300 via-fuchsia-300 to-cyan-300">AI Animation Generator</span>
+      </h1>
+      <p className="mt-3 text-slate-300 max-w-3xl">Create animations using uploaded assets, stickman parts, frame-by-frame sprites, and future local AI video generation.</p>
+      <p className="mt-1 text-xs text-slate-400">Performance depends entirely on your computer hardware when running locally.</p>
+    </section>
+  );
+}
+
+/* ============================================================================
+ * Creation Controls + Animation Results
+ * ==========================================================================*/
+const TABS = ["Image or Text", "Video to Video", "Talk", "Stickman Builder", "Local AI Setup"];
+const MODELS = [
+  { value: "demo",        label: "Demo Mode" },
+  { value: "animatediff", label: "Local AnimateDiff (Coming Soon)" },
+  { value: "svd",         label: "Local Stable Video Diffusion (Coming Soon)" },
+  { value: "wan",         label: "Local Wan Video (Coming Soon)" },
+  { value: "comfy",       label: "Local ComfyUI Workflow (Coming Soon)" },
+];
+const STYLES = ["Cinematic", "Anime", "3D Cartoon", "Pixel Art", "Realistic", "Stickman Sketch", "Cyberpunk"];
+
+function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult }) {
+  const [tab, setTab] = useState(TABS[0]);
+  const [prompt, setPrompt] = useState("A neon city street, slow camera pan, rainy reflections, cinematic.");
+  const [model, setModel] = useState("demo");
+  const [style, setStyle] = useState("Cinematic");
+  const [pub, setPub] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState("");
+  const [files, setFiles] = useState([]);
+
+  const onUpload = (e) => {
+    const list = Array.from(e.target.files || []);
+    const items = list.map(f => ({ name: f.name, url: URL.createObjectURL(f), type: f.type, file: f }));
+    setFiles(p => [...p, ...items]);
+  };
+  const magic = () => {
+    const ideas = [
+      "ultra-detailed, volumetric lighting, 35mm film grain",
+      "soft pastel palette, cel-shaded, smooth keyframe motion, 24fps",
+      "low-angle hero shot, neon rim light, slow zoom",
+      "stop-motion feel, paper-cut textures, hand-drawn outlines",
+    ];
+    setPrompt(p => p + "\n" + ideas[Math.floor(Math.random() * ideas.length)]);
+  };
+
+  const generate = async () => {
+    if (model === "demo") {
+      setBusy(true); setStage("rendering demo"); setResult(null);
+      await new Promise(r => setTimeout(r, 3000));
+      setBusy(false); setStage("");
+      setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
+      return;
+    }
+    if (!settings.workflow) {
+      alert(
+        "No ComfyUI workflow loaded yet.\n\n" +
+        "1. Open Settings (gear icon) → Local AI.\n" +
+        "2. Set the backend URL (default http://localhost:8188).\n" +
+        '3. Upload a workflow JSON exported via "Save (API Format)".\n\n' +
+        "Demo Mode keeps working without any of this."
+      );
+      onOpenSettings && onOpenSettings();
+      return;
+    }
+    setBusy(true); setStage("connecting"); setResult(null);
+    try {
+      const firstImage = (files.find(f => f.type && f.type.startsWith("image/")) || {}).file || null;
+      const out = await comfyGenerate({
+        backendUrl: settings.backendUrl,
+        workflow: settings.workflow,
+        prompt, imageFile: firstImage,
+        onProgress: ({ stage }) => setStage(stage || ""),
+      });
+      setResult({ kind: "comfy", outputs: out.outputs, prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
+    } catch (e) {
+      alert("Local AI generation failed:\n\n" + (e.message || e) + "\n\nTip: Switch back to Demo Mode while you set up ComfyUI.");
+    } finally {
+      setBusy(false); setStage("");
+    }
+  };
+
+  const exportActions = ["Upscale", "Interpolate", "Effects", "Download", "Export PNG", "Export GIF", "Export Sprite Sheet"];
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <Card className="lg:col-span-2">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-white">Creation Controls</h3>
+          <Badge tone="violet">{model === "demo" ? "Demo Mode" : "Local AI"}</Badge>
+        </div>
+
+        <div className="flex flex-wrap gap-1 p-1 rounded-xl bg-black/30 border border-white/10 mb-4">
+          {TABS.map(t => (
+            <button key={t}
+              onClick={() => {
+                setTab(t);
+                if (t === "Stickman Builder") onScrollTo && onScrollTo("stickman");
+                if (t === "Local AI Setup")  onScrollTo && onScrollTo("local-ai");
+              }}
+              className={"text-xs md:text-sm px-3 py-2 rounded-lg transition " +
+                (tab === t
+                  ? "bg-violet-500/20 text-violet-200 border border-violet-400/40"
+                  : "text-slate-400 hover:text-white hover:bg-white/5 border border-transparent")}>
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <label className="block">
+          <div className="text-xs text-cyan-300 mb-2 font-medium">Upload Media</div>
+          <div className="border border-dashed border-white/15 rounded-xl p-5 text-center hover:border-violet-400/50 hover:bg-white/5 transition cursor-pointer bg-black/20">
+            <div className="text-2xl text-violet-300">⬆</div>
+            <div className="mt-1 text-sm text-slate-300">Click to upload images, video, or audio</div>
+            <div className="text-xs text-slate-400">Files stay in your browser.</div>
+            <input type="file" multiple className="hidden" onChange={onUpload} />
+          </div>
+        </label>
+        {files.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {files.map((f, i) => <span key={i} className="text-xs px-2 py-1 rounded bg-white/5 text-slate-300 border border-white/10">{f.name}</span>)}
+          </div>
+        )}
+
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-cyan-300 font-medium">Prompt</div>
+            <GhostBtn onClick={magic}>✨ Magic Prompt</GhostBtn>
+          </div>
+          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={4} className={inputCls + " text-sm scroll-thin"} placeholder="Describe the animation you want…" />
+        </div>
+
+        <SecondaryBtn className="mt-3 w-full">+ Add Character</SecondaryBtn>
+
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">AI Model</div>
+            <select value={model} onChange={e => setModel(e.target.value)} className={inputCls + " text-sm"}>
+              {MODELS.map(m => <option key={m.value} value={m.value} className="bg-slate-900">{m.label}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Style</div>
+            <select value={style} onChange={e => setStyle(e.target.value)} className={inputCls + " text-sm"}>
+              {STYLES.map(s => <option key={s} className="bg-slate-900">{s}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-4 flex items-center justify-between rounded-xl bg-white/5 border border-white/10 px-3 py-2">
+          <div>
+            <div className="text-sm text-white">{pub ? "Public" : "Private"}</div>
+            <div className="text-xs text-slate-400">Visibility (saved locally).</div>
+          </div>
+          <button onClick={() => setPub(v => !v)} className={"relative w-11 h-6 rounded-full transition " + (pub ? "bg-gradient-to-r from-violet-500 to-cyan-500" : "bg-white/10 border border-white/10")}>
+            <span className={"absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition " + (pub ? "left-5" : "left-0.5")} />
+          </button>
+        </div>
+
+        <PrimaryBtn disabled={busy} onClick={generate} className="mt-4 w-full py-3 text-base">
+          {busy ? (
+            <>
+              <span className="w-4 h-4 border-2 border-white/70 border-t-transparent rounded-full animate-spin" />
+              {stage || "Generating…"}
+            </>
+          ) : <>⚡ Generate Animation</>}
+        </PrimaryBtn>
+
+        <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+          Real AI video generation requires either a paid API or a local GPU setup. This dashboard is built for local generation — the frontend is ready, but the local AI backend must be connected later.
+        </div>
+      </Card>
+
+      <Card className="lg:col-span-3">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-white">Animation Results</h3>
+          <Badge tone="cyan">Preview</Badge>
+        </div>
+
+        <InnerCard className="overflow-hidden">
+          <div className="canvas-bg aspect-video flex items-center justify-center">
+            {busy ? (
+              <div className="text-center">
+                <div className="w-10 h-10 mx-auto mb-3 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
+                <div className="text-slate-200">{stage ? "Local AI: " + stage + "…" : "Rendering demo result…"}</div>
+                <div className="text-xs text-slate-400 mt-1">{model === "demo" ? "Demo Mode" : "Talking to local ComfyUI backend"}</div>
+              </div>
+            ) : result ? (
+              result.kind === "comfy" ? <ComfyResult result={result} /> : <DemoResult result={result} />
+            ) : (
+              <div className="text-center p-8">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-violet-900/40 text-2xl">🎬</div>
+                <div className="mt-3 text-white font-medium">No animation yet</div>
+                <div className="text-sm text-slate-400">Click <span className="text-violet-300">Generate Animation</span> to see a demo.</div>
+              </div>
+            )}
+          </div>
+        </InnerCard>
+
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {exportActions.map(b => (
+            <GhostBtn key={b} onClick={() => alert(b + ": stub. Will be wired up after a result is available or after the local backend is connected.")}>
+              {b}
+            </GhostBtn>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DemoResult({ result }) {
+  return (
+    <div className="w-full h-full relative overflow-hidden">
+      <style>{`
+        @keyframes drift{0%{transform:translateX(-20%)}100%{transform:translateX(120%)}}
+        @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+      `}</style>
+      <div className="absolute inset-0" style={{ background: "radial-gradient(60% 60% at 50% 60%, rgba(139,92,246,.5), transparent 70%), radial-gradient(40% 40% at 80% 20%, rgba(34,211,238,.4), transparent 70%)" }} />
+      <div className="absolute inset-0 flex items-center justify-center" style={{ animation: "bob 3s ease-in-out infinite" }}>
+        <div className="text-6xl">🌆</div>
+      </div>
+      <div className="absolute top-6 left-0 right-0" style={{ animation: "drift 9s linear infinite" }}>
+        <div className="text-3xl">☁️</div>
+      </div>
+      <div className="absolute top-3 right-3"><Badge tone="violet">Demo Mode</Badge></div>
+      <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between">
+        <div className="truncate"><span className="text-slate-400">{result.style}</span> · {result.prompt}</div>
+        <div className="text-slate-400">{result.generatedAt}</div>
+      </div>
+    </div>
+  );
+}
+
+function ComfyResult({ result }) {
+  const [idx, setIdx] = useState(0);
+  const out = result.outputs[Math.min(idx, result.outputs.length - 1)];
+  return (
+    <div className="w-full h-full relative bg-black/40 flex items-center justify-center">
+      {out.mime.indexOf("video") === 0
+        ? <video src={out.url} controls autoPlay loop className="max-w-full max-h-full" />
+        : <img src={out.url} alt={out.filename} className="max-w-full max-h-full object-contain" />}
+      <div className="absolute top-3 right-3 flex gap-2">
+        <Badge tone="emerald">Local ComfyUI</Badge>
+        {result.outputs.length > 1 && <Badge tone="violet">{idx + 1}/{result.outputs.length}</Badge>}
+      </div>
+      {result.outputs.length > 1 && (
+        <div className="absolute inset-y-0 left-0 right-0 flex justify-between items-center px-2 pointer-events-none">
+          <button onClick={() => setIdx(i => Math.max(0, i - 1))} className="pointer-events-auto w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10">‹</button>
+          <button onClick={() => setIdx(i => Math.min(result.outputs.length - 1, i + 1))} className="pointer-events-auto w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10">›</button>
+        </div>
+      )}
+      <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between gap-3">
+        <div className="truncate"><span className="text-slate-400">prompt:</span> {result.prompt}</div>
+        <a href={out.url} download={out.filename} className="text-cyan-300 hover:text-cyan-200 underline whitespace-nowrap">download {out.filename}</a>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * Stickman Asset Builder
+ * ==========================================================================*/
+const PART_TYPES = ["head", "eyes", "eyebrows", "nose", "ears", "mouth", "body", "arms", "legs", "feet"];
+const PRESETS = ["run", "walk", "wave", "eat", "angry stomp", "flex muscles", "jump", "dance", "point"];
+
+function drawBuiltinPart(ctx, type, w, h) {
+  ctx.save();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.translate(w / 2, h / 2);
+  const s = Math.min(w, h);
+  switch (type) {
+    case "head":     ctx.beginPath(); ctx.arc(0,0,s*0.4,0,Math.PI*2); ctx.stroke(); break;
+    case "eyes":     ctx.beginPath(); ctx.arc(-s*0.15,0,s*0.06,0,Math.PI*2); ctx.fill();
+                     ctx.beginPath(); ctx.arc( s*0.15,0,s*0.06,0,Math.PI*2); ctx.fill(); break;
+    case "eyebrows": ctx.beginPath(); ctx.moveTo(-s*0.25,0); ctx.lineTo(-s*0.05,-s*0.1); ctx.stroke();
+                     ctx.beginPath(); ctx.moveTo( s*0.05,-s*0.1); ctx.lineTo( s*0.25,0); ctx.stroke(); break;
+    case "nose":     ctx.beginPath(); ctx.moveTo(0,-s*0.2); ctx.lineTo(-s*0.08,s*0.1); ctx.lineTo(s*0.08,s*0.1); ctx.closePath(); ctx.stroke(); break;
+    case "ears":     ctx.beginPath(); ctx.arc(-s*0.4,0,s*0.12,0,Math.PI*2); ctx.stroke();
+                     ctx.beginPath(); ctx.arc( s*0.4,0,s*0.12,0,Math.PI*2); ctx.stroke(); break;
+    case "mouth":    ctx.beginPath(); ctx.arc(0,-s*0.05,s*0.25,0.1*Math.PI,0.9*Math.PI); ctx.stroke(); break;
+    case "body":     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo(0,s*0.4); ctx.stroke(); break;
+    case "arms":     ctx.beginPath(); ctx.moveTo(-s*0.4,0); ctx.lineTo(s*0.4,0); ctx.stroke(); break;
+    case "legs":     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo(-s*0.3,s*0.4); ctx.stroke();
+                     ctx.beginPath(); ctx.moveTo(0,-s*0.4); ctx.lineTo( s*0.3,s*0.4); ctx.stroke(); break;
+    case "feet":     ctx.beginPath(); ctx.ellipse(-s*0.2,0,s*0.18,s*0.06,0,0,Math.PI*2); ctx.stroke();
+                     ctx.beginPath(); ctx.ellipse( s*0.2,0,s*0.18,s*0.06,0,0,Math.PI*2); ctx.stroke(); break;
+    default:         ctx.strokeRect(-s*0.3,-s*0.3,s*0.6,s*0.6);
+  }
+  ctx.restore();
+}
+
+function defaultStickman() {
+  const u = () => crypto.randomUUID();
+  return [
+    { id: u(), type: "body",     x: 300, y: 240, w:   8, h: 160, rot: 0, src: null },
+    { id: u(), type: "head",     x: 300, y: 140, w:  80, h:  80, rot: 0, src: null },
+    { id: u(), type: "eyes",     x: 300, y: 135, w:  60, h:  30, rot: 0, src: null },
+    { id: u(), type: "eyebrows", x: 300, y: 120, w:  60, h:  20, rot: 0, src: null },
+    { id: u(), type: "mouth",    x: 300, y: 155, w:  40, h:  30, rot: 0, src: null },
+    { id: u(), type: "arms",     x: 300, y: 240, w: 160, h:   8, rot: 0, src: null },
+    { id: u(), type: "legs",     x: 300, y: 360, w: 100, h: 120, rot: 0, src: null },
+    { id: u(), type: "feet",     x: 300, y: 430, w: 100, h:  14, rot: 0, src: null },
+  ];
+}
+
+function FrameThumb({ frame }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const c = ref.current; if (!c) return;
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.save();
+    ctx.scale(c.width / 600, c.height / 500);
+    frame.parts.forEach(p => {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.rot || 0) * Math.PI / 180);
+      drawBuiltinPart(ctx, p.type, p.w, p.h);
+      ctx.restore();
+    });
+    ctx.restore();
+  }, [frame]);
+  return <canvas ref={ref} width={120} height={78} className="w-full h-full" />;
+}
+
+function StickmanBuilder() {
+  const W = 600, H = 500;
+  const canvasRef = useRef(null);
+  const imgCache = useRef(new Map());
+
+  const [library, setLibrary] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("laias.library") || "{}"); } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem("laias.library", JSON.stringify(library)); } catch (_) {} }, [library]);
+
+  const [libTab, setLibTab] = useState("head");
+  const [frames, setFrames] = useState([{ id: crypto.randomUUID(), parts: defaultStickman() }]);
+  const [active, setActive] = useState(0);
+  const [selected, setSelected] = useState(null);
+  const [drag, setDrag] = useState(null);
+  const [dragFrame, setDragFrame] = useState(null);
+  const [fps, setFps] = useState(8);
+  const [playing, setPlaying] = useState(false);
+  const [loop, setLoop] = useState(true);
+  const [onion, setOnion] = useState(true);
+  const [presets, setPresets] = useState(() => { try { return JSON.parse(localStorage.getItem("laias.presets") || "{}"); } catch { return {}; } });
+  const [gifBusy, setGifBusy] = useState(false);
+
+  const frame = frames[active];
+
+  const drawFrame = useCallback((ctx, f, selId) => {
+    f.parts.forEach(p => {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.rot || 0) * Math.PI / 180);
+      if (p.src) {
+        let im = imgCache.current.get(p.src);
+        if (!im) {
+          im = new Image();
+          im.onload = () => { /* trigger redraw via setSelected no-op is overkill; we rely on next state change */ };
+          im.src = p.src;
+          imgCache.current.set(p.src, im);
+        }
+        if (im && im.complete && im.naturalWidth) ctx.drawImage(im, -p.w / 2, -p.h / 2, p.w, p.h);
+        else drawBuiltinPart(ctx, p.type, p.w, p.h);
+      } else {
+        drawBuiltinPart(ctx, p.type, p.w, p.h);
+      }
+      if (selId === p.id) {
+        ctx.strokeStyle = "#a78bfa";
+        ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+        ctx.strokeRect(-p.w / 2 - 4, -p.h / 2 - 4, p.w + 8, p.h + 8);
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    });
+  }, []);
+
+  const draw = useCallback(() => {
+    const c = canvasRef.current; if (!c) return;
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    if (onion && active > 0) { ctx.globalAlpha = 0.18; drawFrame(ctx, frames[active - 1]); ctx.globalAlpha = 1; }
+    drawFrame(ctx, frame, selected);
+  }, [frame, frames, active, onion, selected, drawFrame]);
+
+  useEffect(() => { draw(); }, [draw]);
+
+  // Force redraw once any newly-uploaded image finishes loading.
+  useEffect(() => {
+    const all = new Set();
+    frames.forEach(f => f.parts.forEach(p => p.src && all.add(p.src)));
+    let cancelled = false;
+    all.forEach(src => {
+      let im = imgCache.current.get(src);
+      if (!im) {
+        im = new Image();
+        im.src = src;
+        imgCache.current.set(src, im);
+      }
+      if (!im.complete) im.addEventListener("load", () => { if (!cancelled) draw(); }, { once: true });
+    });
+    return () => { cancelled = true; };
+  }, [frames, draw]);
+
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => {
+      setActive(a => { const next = a + 1; if (next >= frames.length) return loop ? 0 : a; return next; });
+    }, 1000 / fps);
+    return () => clearInterval(id);
+  }, [playing, fps, frames.length, loop]);
+
+  const updatePart = (id, patch) =>
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.map(p => p.id === id ? { ...p, ...patch } : p) } : f));
+  const layerOp = (id, op) => setFrames(fs => fs.map((f, i) => {
+    if (i !== active) return f;
+    const idx = f.parts.findIndex(p => p.id === id); if (idx < 0) return f;
+    const arr = [...f.parts]; const [p] = arr.splice(idx, 1);
+    if (op === "forward")        arr.splice(Math.min(arr.length, idx + 1), 0, p);
+    else if (op === "back")      arr.splice(Math.max(0, idx - 1), 0, p);
+    else if (op === "duplicate") arr.splice(idx, 0, p, { ...p, id: crypto.randomUUID(), x: p.x + 15, y: p.y + 15 });
+    return { ...f, parts: arr };
+  }));
+  const deleteSelected = () => {
+    if (!selected) return;
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: f.parts.filter(p => p.id !== selected) } : f));
+    setSelected(null);
+  };
+  const addPart = (type, src = null, pos = null) => {
+    const lib = library[type] || [];
+    const finalSrc = src != null ? src : (lib.length ? lib[lib.length - 1].src : null);
+    const np = { id: crypto.randomUUID(), type, x: pos ? pos.x : 300, y: pos ? pos.y : 250, w: 120, h: 120, rot: 0, src: finalSrc };
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: [...f.parts, np] } : f));
+    setSelected(np.id);
+  };
+
+  const onMouseDown = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+    const hit = [...frame.parts].reverse().find(p => Math.abs(x - p.x) < p.w / 2 && Math.abs(y - p.y) < p.h / 2);
+    if (hit) { setSelected(hit.id); setDrag({ id: hit.id, dx: hit.x - x, dy: hit.y - y }); }
+    else setSelected(null);
+  };
+  const onMouseMove = (e) => {
+    if (!drag) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+    updatePart(drag.id, { x: x + drag.dx, y: y + drag.dy });
+  };
+  const onMouseUp = () => setDrag(null);
+  const onDragOver = (e) => { if (e.dataTransfer.types.includes("application/x-laias-part")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } };
+  const onDrop = (e) => {
+    const raw = e.dataTransfer.getData("application/x-laias-part");
+    if (!raw) return;
+    e.preventDefault();
+    let pl; try { pl = JSON.parse(raw); } catch { return; }
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+    addPart(pl.type, pl.src, { x, y });
+  };
+
+  const uploadPart = (type) => async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const items = await Promise.all(files.map(f => new Promise(res => {
+      const r = new FileReader();
+      r.onload = () => res({ id: crypto.randomUUID(), src: r.result, name: f.name });
+      r.readAsDataURL(f);
+    })));
+    setLibrary(L => ({ ...L, [type]: [...(L[type] || []), ...items] }));
+    e.target.value = "";
+  };
+  const deleteLibItem = (type, id) => setLibrary(L => ({ ...L, [type]: (L[type] || []).filter(i => i.id !== id) }));
+  const uploadFrameSheet = (e) => {
+    const files = Array.from(e.target.files || []); if (!files.length) return;
+    Promise.all(files.map(f => new Promise(res => {
+      const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f);
+    }))).then(srcs => {
+      const newFrames = srcs.map(s => ({
+        id: crypto.randomUUID(),
+        parts: [{ id: crypto.randomUUID(), type: "body", x: 300, y: 250, w: 300, h: 300, rot: 0, src: s }],
+      }));
+      setFrames(fs => [...fs, ...newFrames]);
+    });
+    e.target.value = "";
+  };
+
+  const addFrame = () => {
+    setFrames(fs => [...fs.slice(0, active + 1), { id: crypto.randomUUID(), parts: [] }, ...fs.slice(active + 1)]);
+    setActive(a => a + 1); setSelected(null);
+  };
+  const duplicateFrame = () => {
+    setFrames(fs => {
+      const src = fs[active];
+      const copy = { id: crypto.randomUUID(), parts: src.parts.map(p => ({ ...p, id: crypto.randomUUID() })) };
+      return [...fs.slice(0, active + 1), copy, ...fs.slice(active + 1)];
+    });
+    setActive(a => a + 1); setSelected(null);
+  };
+  const deleteFrame = () => {
+    if (frames.length <= 1) return;
+    setFrames(fs => fs.filter((_, i) => i !== active));
+    setActive(a => Math.max(0, a - 1)); setSelected(null);
+  };
+  const moveFrame = (from, to) => {
+    if (from === to || from < 0 || to < 0 || from >= frames.length || to >= frames.length) return;
+    setFrames(fs => { const arr = [...fs]; const [f] = arr.splice(from, 1); arr.splice(to, 0, f); return arr; });
+    setActive(to);
+  };
+
+  const applyPresetAnim = (name) => {
+    const base = JSON.parse(JSON.stringify(frame.parts));
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const t = i / 5;
+      const parts = base.map(p => {
+        const np = { ...p, id: crypto.randomUUID() };
+        switch (name) {
+          case "walk":
+          case "run":
+            if (p.type === "legs") np.rot = Math.sin(t * Math.PI * 2) * (name === "run" ? 35 : 18);
+            if (p.type === "arms") np.rot = -Math.sin(t * Math.PI * 2) * (name === "run" ? 35 : 15);
+            if (p.type === "body") np.y = p.y + Math.abs(Math.sin(t * Math.PI * 2)) * -6;
+            break;
+          case "wave":  if (p.type === "arms") np.rot = -60 + Math.sin(t * Math.PI * 2) * 15; break;
+          case "eat":   if (p.type === "mouth") np.h = p.h * (0.6 + 0.4 * Math.abs(Math.sin(t * Math.PI * 4)));
+                        if (p.type === "arms") np.rot = -30; break;
+          case "angry stomp": if (p.type === "legs") np.rot = i % 2 === 0 ? 20 : -20;
+                              if (p.type === "body") np.y = p.y + (i % 2 === 0 ? -4 : 4); break;
+          case "flex muscles": if (p.type === "arms") { np.rot = i % 2 ? -40 : 40; np.h = p.h * 1.5; } break;
+          case "jump":  np.y = p.y - Math.sin(t * Math.PI) * 40; break;
+          case "dance": if (p.type === "body") np.rot = Math.sin(t * Math.PI * 2) * 10;
+                        if (p.type === "arms") np.rot = Math.sin(t * Math.PI * 2 + 1) * 25;
+                        if (p.type === "legs") np.rot = Math.sin(t * Math.PI * 2 + 2) * 10; break;
+          case "point": if (p.type === "arms") np.rot = -20 - i * 2; break;
+        }
+        return np;
+      });
+      out.push({ id: crypto.randomUUID(), parts });
+    }
+    setFrames(out); setActive(0); setSelected(null);
+  };
+
+  const savePreset = () => {
+    const name = window.prompt("Preset name:"); if (!name) return;
+    const next = { ...presets, [name]: frame.parts };
+    setPresets(next); localStorage.setItem("laias.presets", JSON.stringify(next));
+  };
+  const loadPreset = (name) => {
+    const parts = presets[name]; if (!parts) return;
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: JSON.parse(JSON.stringify(parts)) } : f));
+  };
+  const saveProject = () => {
+    localStorage.setItem("laias.project", JSON.stringify({ frames, fps, loop }));
+    alert("Project saved to browser local storage.");
+  };
+  const loadProject = () => {
+    const d = JSON.parse(localStorage.getItem("laias.project") || "null");
+    if (!d) return alert("No saved project.");
+    setFrames(d.frames); setFps(d.fps || 8); setLoop(!!d.loop); setActive(0);
+  };
+
+  const renderFrameToCanvas = (f) => {
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    drawFrame(c.getContext("2d"), f);
+    return c;
+  };
+  const exportPNG = () => {
+    const c = renderFrameToCanvas(frame);
+    const a = document.createElement("a");
+    a.href = c.toDataURL("image/png");
+    a.download = "stickman-frame-" + (active + 1) + "-transparent.png";
+    a.click();
+  };
+  const exportPNGSequence = async () => {
+    for (let i = 0; i < frames.length; i++) {
+      const c = renderFrameToCanvas(frames[i]);
+      const a = document.createElement("a");
+      a.href = c.toDataURL("image/png");
+      a.download = "stickman-" + String(i + 1).padStart(3, "0") + "-transparent.png";
+      document.body.appendChild(a); a.click(); a.remove();
+      await new Promise(r => setTimeout(r, 150));
+    }
+  };
+  const exportSpriteSheet = () => {
+    const cols = Math.min(frames.length, 6);
+    const rows = Math.ceil(frames.length / cols);
+    const c = document.createElement("canvas");
+    c.width = cols * W; c.height = rows * H;
+    const ctx = c.getContext("2d");
+    frames.forEach((f, i) => { const fc = renderFrameToCanvas(f); ctx.drawImage(fc, (i % cols) * W, Math.floor(i / cols) * H); });
+    const a = document.createElement("a");
+    a.href = c.toDataURL("image/png");
+    a.download = "stickman-sprite-sheet.png";
+    a.click();
+  };
+  const exportGIF = () => {
+    if (frames.length < 2) return alert("Add at least 2 frames before exporting a GIF.");
+    const GIF = window.GIF;
+    if (typeof GIF === "undefined") return alert("GIF library failed to load.");
+    setGifBusy(true);
+    const gif = new GIF({
+      workers: 2, quality: 8, width: W, height: H, transparent: null,
+      workerScript: "https://cdn.jsdelivr.net/gh/jnordberg/gif.js@0.2.0/dist/gif.worker.js",
+    });
+    frames.forEach(f => gif.addFrame(renderFrameToCanvas(f), { delay: 1000 / fps }));
+    gif.on("finished", blob => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "stickman-" + frames.length + "f-" + fps + "fps.gif";
+      document.body.appendChild(a); a.click(); a.remove();
+      setGifBusy(false);
+    });
+    gif.render();
+  };
+
+  const sel = frame.parts.find(p => p.id === selected);
+  const totalAssets = Object.values(library).reduce((n, a) => n + (a ? a.length : 0), 0);
+
+  return (
+    <section id="stickman" className="max-w-7xl mx-auto px-4 md:px-6 py-10">
+      <div className="mb-6">
+        <div className="text-xs uppercase tracking-widest text-cyan-300 mb-2 font-medium">Builder</div>
+        <h2 className="text-2xl md:text-3xl font-bold text-white">Stickman Asset Builder</h2>
+        <p className="text-slate-300 mt-2 max-w-3xl">Upload transparent PNG parts (or use the built-in shapes), drag them onto the canvas, resize/rotate, and animate frame-by-frame. Everything stays in your browser.</p>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+        {/* Asset Library */}
+        <Card className="xl:col-span-1">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-white">Asset Library</h4>
+            <Badge tone="violet">{totalAssets} assets</Badge>
+          </div>
+          <p className="text-xs text-slate-400 mb-2">Drag a thumbnail onto the canvas, or click to add it.</p>
+
+          <div className="flex flex-wrap gap-1 mb-3">
+            {PART_TYPES.map(t => {
+              const count = (library[t] || []).length;
+              return (
+                <button key={t} onClick={() => setLibTab(t)}
+                  className={"text-xs px-2 py-1 rounded-full border capitalize transition " +
+                    (libTab === t
+                      ? "bg-violet-500/20 text-violet-200 border-violet-400/40"
+                      : "bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10")}>
+                  {t}{count ? <span className="ml-1 opacity-70">·{count}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-1 mb-2">
+            <GhostBtn onClick={() => addPart(libTab)}>+ Add {libTab}</GhostBtn>
+            <label className="text-xs px-2 py-1 rounded text-white bg-white/10 border border-white/20 hover:bg-white/20 cursor-pointer">
+              ⬆ Upload
+              <input type="file" accept="image/png,image/gif,image/webp" multiple className="hidden" onChange={uploadPart(libTab)} />
+            </label>
+          </div>
+
+          <InnerCard className="p-2 min-h-[120px] max-h-[260px] overflow-auto scroll-thin">
+            {(library[libTab] || []).length === 0 ? (
+              <label className="cursor-pointer h-[110px] rounded-lg border border-dashed border-white/15 hover:border-violet-400/50 flex items-center justify-center text-center text-xs text-slate-400 hover:bg-white/5 transition">
+                <span>
+                  <div className="text-lg text-violet-300">⬆</div>
+                  <div>No <span className="capitalize text-slate-300">{libTab}</span> assets yet</div>
+                  <div className="text-slate-500">Click to upload transparent PNGs</div>
+                </span>
+                <input type="file" accept="image/png,image/gif,image/webp" multiple className="hidden" onChange={uploadPart(libTab)} />
+              </label>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                {(library[libTab] || []).map(item => (
+                  <div key={item.id} draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = "copy";
+                      e.dataTransfer.setData("application/x-laias-part", JSON.stringify({ type: libTab, src: item.src }));
+                    }}
+                    onClick={() => addPart(libTab, item.src)}
+                    className="group relative rounded-lg border border-white/10 hover:border-violet-400/50 cursor-grab active:cursor-grabbing canvas-bg transition">
+                    <img src={item.src} alt={item.name || libTab} className="w-full h-16 object-contain p-1 pointer-events-none" />
+                    <button onClick={(e) => { e.stopPropagation(); deleteLibItem(libTab, item.id); }}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-rose-500/80 text-white text-xs opacity-0 group-hover:opacity-100 transition">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </InnerCard>
+
+          <label className="block mt-3 text-xs px-2 py-2 rounded-lg text-white bg-white/10 border border-white/20 hover:bg-white/20 cursor-pointer text-center transition">
+            Upload frames (each image = new frame)
+            <input type="file" accept="image/*" multiple className="hidden" onChange={uploadFrameSheet} />
+          </label>
+          <p className="text-xs text-slate-400 mt-1">Library is saved in your browser (localStorage).</p>
+        </Card>
+
+        {/* Canvas + Timeline */}
+        <Card className="xl:col-span-3">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-white">Canvas · Frame {active + 1}/{frames.length} <span className="ml-2 text-xs font-normal text-slate-400">drop assets here ↓</span></h4>
+            <div className="flex items-center gap-3 text-xs">
+              <label className="text-slate-300 flex items-center gap-1"><input type="checkbox" checked={onion} onChange={e => setOnion(e.target.checked)} /> Onion skin</label>
+              <label className="text-slate-300 flex items-center gap-1"><input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} /> Loop</label>
+            </div>
+          </div>
+
+          <InnerCard className="overflow-hidden">
+            <canvas ref={canvasRef} width={W} height={H}
+              onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
+              onDragOver={onDragOver} onDrop={onDrop}
+              style={{ display: "block", width: "100%", height: "auto", cursor: drag ? "grabbing" : "grab" }}
+              className="canvas-bg" />
+          </InnerCard>
+
+          {sel ? (
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <label className="text-xs text-slate-300">Width <input type="range" min="10" max="400" value={sel.w} onChange={e => updatePart(sel.id, { w: +e.target.value })} className="w-full" /></label>
+              <label className="text-xs text-slate-300">Height <input type="range" min="10" max="400" value={sel.h} onChange={e => updatePart(sel.id, { h: +e.target.value })} className="w-full" /></label>
+              <label className="text-xs text-slate-300">Rotation <input type="range" min="-180" max="180" value={sel.rot} onChange={e => updatePart(sel.id, { rot: +e.target.value })} className="w-full" /></label>
+              <div className="flex flex-wrap items-end gap-1">
+                <GhostBtn onClick={() => layerOp(sel.id, "back")}>Send Back</GhostBtn>
+                <GhostBtn onClick={() => layerOp(sel.id, "forward")}>Bring Forward</GhostBtn>
+                <GhostBtn onClick={() => layerOp(sel.id, "duplicate")}>Duplicate</GhostBtn>
+                <DangerBtn onClick={deleteSelected}>Delete</DangerBtn>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 mt-3">Click a part on the canvas to select it. Drag to move. Use sliders to resize / rotate.</p>
+          )}
+
+          <InnerCard className="mt-4 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-white">Timeline</span>
+                <Badge tone="slate">{frames.length} frame{frames.length === 1 ? "" : "s"}</Badge>
+                <Badge tone="violet">Frame {active + 1}</Badge>
+              </div>
+              <div className="flex items-center gap-1">
+                <GhostBtn onClick={addFrame}>+ Add</GhostBtn>
+                <GhostBtn onClick={duplicateFrame}>⎘ Duplicate</GhostBtn>
+                <DangerBtn disabled={frames.length <= 1} onClick={deleteFrame}>🗑 Delete</DangerBtn>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <GhostBtn onClick={() => setActive(a => Math.max(0, a - 1))}>◀</GhostBtn>
+              <PrimaryBtn className="px-3 py-1 text-xs" onClick={() => setPlaying(p => !p)}>{playing ? "⏸ Pause" : "▶ Play"}</PrimaryBtn>
+              <GhostBtn onClick={() => setActive(a => Math.min(frames.length - 1, a + 1))}>▶</GhostBtn>
+
+              <div className="flex items-center gap-2 ml-2">
+                <span className="text-xs text-cyan-300 font-medium">FPS</span>
+                <input type="range" min="1" max="30" value={fps} onChange={e => setFps(+e.target.value)} className="w-28" />
+                <input type="number" min="1" max="60" value={fps} onChange={e => setFps(Math.max(1, Math.min(60, +e.target.value || 1)))} className="w-14 bg-black/30 border border-white/10 rounded px-1 py-0.5 text-xs text-white" />
+              </div>
+
+              <div className="ml-auto text-xs text-slate-400">~{(frames.length / fps).toFixed(2)}s @ {fps}fps</div>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto scroll-thin pb-2">
+              {frames.map((f, i) => (
+                <div key={f.id} draggable
+                  onDragStart={(e) => { setDragFrame(i); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("application/x-laias-frame", String(i)); }}
+                  onDragOver={(e) => { if (e.dataTransfer.types.includes("application/x-laias-frame")) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                  onDrop={(e) => { const raw = e.dataTransfer.getData("application/x-laias-frame"); if (!raw) return; e.preventDefault(); const from = parseInt(raw, 10); if (!isNaN(from)) moveFrame(from, i); setDragFrame(null); }}
+                  onDragEnd={() => setDragFrame(null)}
+                  onClick={() => { setActive(i); setSelected(null); }}
+                  style={{ width: 120, height: 78 }}
+                  className={"shrink-0 relative rounded-lg border-2 cursor-pointer overflow-hidden transition " +
+                    (i === active ? "border-violet-400 shadow-lg shadow-violet-500/40" : "border-white/10 hover:border-white/30") +
+                    (dragFrame === i ? " opacity-50" : "")}>
+                  <div className="absolute inset-0 canvas-bg"><FrameThumb frame={f} /></div>
+                  <span className="absolute top-1 left-1 text-xs px-1.5 py-0.5 bg-black/70 rounded text-slate-200">{i + 1}</span>
+                </div>
+              ))}
+              <button onClick={addFrame} style={{ width: 120, height: 78 }}
+                className="shrink-0 flex items-center justify-center rounded-lg border-2 border-dashed border-white/15 hover:border-violet-400/50 text-slate-400 hover:text-violet-300 text-2xl transition">+</button>
+            </div>
+          </InnerCard>
+        </Card>
+
+        {/* Presets + Export */}
+        <Card className="xl:col-span-1">
+          <h4 className="font-semibold text-white mb-2">Presets & Export</h4>
+          <p className="text-xs text-slate-400 mb-3">Frame controls and playback are on the timeline strip below the canvas.</p>
+
+          <details className="rounded-lg bg-white/5 border border-white/10 p-2 mb-2">
+            <summary className="text-xs text-violet-300 font-medium cursor-pointer">Preset Animations</summary>
+            <div className="flex flex-wrap gap-1 mt-2">
+              {PRESETS.map(p => <GhostBtn key={p} className="capitalize" onClick={() => applyPresetAnim(p)}>{p}</GhostBtn>)}
+            </div>
+          </details>
+
+          <details className="rounded-lg bg-white/5 border border-white/10 p-2 mb-2">
+            <summary className="text-xs text-violet-300 font-medium cursor-pointer">Character Presets</summary>
+            <div className="flex flex-wrap gap-1 mt-2">
+              <GhostBtn className="bg-emerald-500/15 border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/25" onClick={savePreset}>Save Current</GhostBtn>
+              {Object.keys(presets).map(n => <GhostBtn key={n} onClick={() => loadPreset(n)}>{n}</GhostBtn>)}
+            </div>
+          </details>
+
+          <details className="rounded-lg bg-white/5 border border-white/10 p-2 mb-2">
+            <summary className="text-xs text-violet-300 font-medium cursor-pointer">Project</summary>
+            <div className="flex gap-1 mt-2">
+              <GhostBtn className="bg-emerald-500/15 border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/25" onClick={saveProject}>Save</GhostBtn>
+              <GhostBtn onClick={loadProject}>Load</GhostBtn>
+            </div>
+          </details>
+
+          <details className="rounded-lg bg-white/5 border border-white/10 p-2" open>
+            <summary className="text-xs text-violet-300 font-medium cursor-pointer">Export</summary>
+            <div className="grid grid-cols-2 gap-1 mt-2">
+              <GhostBtn className="bg-emerald-500/15 border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/25" onClick={exportPNG}>Transparent PNG</GhostBtn>
+              <GhostBtn onClick={exportPNGSequence}>PNG Sequence</GhostBtn>
+              <GhostBtn onClick={exportSpriteSheet}>Sprite Sheet</GhostBtn>
+              <GhostBtn disabled={gifBusy} className="bg-gradient-to-r from-violet-500/40 to-cyan-500/40 border-violet-400/40 text-white hover:from-violet-500/60 hover:to-cyan-500/60" onClick={exportGIF}>{gifBusy ? "Rendering…" : "Animated GIF"}</GhostBtn>
+            </div>
+          </details>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================================
+ * Local AI Setup
+ * ==========================================================================*/
+const LOCAL_BACKENDS = [
+  { name: "ComfyUI",                desc: "Node-based local pipeline. Recommended entry point.",      link: "https://github.com/comfyanonymous/ComfyUI" },
+  { name: "AnimateDiff",            desc: "Motion module for Stable Diffusion. Short looping clips.", link: "https://github.com/guoyww/AnimateDiff" },
+  { name: "Stable Video Diffusion", desc: "Image-to-video model from Stability.",                     link: "https://huggingface.co/stabilityai/stable-video-diffusion-img2vid" },
+  { name: "Wan Video",              desc: "Open video model. Heavier VRAM requirements.",             link: "#" },
+  { name: "FFmpeg",                 desc: "Required for encoding GIF/MP4 outputs locally.",           link: "https://ffmpeg.org" },
+];
+function LocalAISetup({ onOpenSettings }) {
+  return (
+    <section id="local-ai" className="max-w-7xl mx-auto px-4 md:px-6 py-10">
+      <div className="mb-6">
+        <div className="text-xs uppercase tracking-widest text-cyan-300 mb-2 font-medium">Backend</div>
+        <h2 className="text-2xl md:text-3xl font-bold text-white">Local AI Setup</h2>
+        <p className="text-slate-300 mt-2 max-w-3xl">The frontend is ready. The local backend is not. When you install one of these tools, connect it from Settings → Local AI.</p>
+      </div>
+
+      {/* Hosted-deployment note */}
+      <div className="mb-6 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+        <div className="font-semibold text-amber-200 mb-1">⚠ How local AI works on the hosted site</div>
+        Local AI generation only works when the user runs the local backend on their own computer. The online website can connect to <span className="font-mono text-amber-200">localhost</span> only from the same user&apos;s device — there is no shared GPU server. Each visitor brings their own ComfyUI install.
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {LOCAL_BACKENDS.map(b => (
+          <Card key={b.name} className="hover:border-violet-400/40 hover:shadow-violet-500/20 transition">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-500 text-white flex items-center justify-center font-bold shadow-lg shadow-violet-900/40">{b.name[0]}</div>
+                <div>
+                  <div className="font-semibold text-white">{b.name}</div>
+                  <div className="text-xs text-slate-400">{b.desc}</div>
+                </div>
+              </div>
+              <Badge tone="rose">● Not connected</Badge>
+            </div>
+            <div className="mt-3 text-xs text-slate-300 space-y-1">
+              <div>• Requirement: <span className="text-slate-400">Local install</span></div>
+              <div>• Best with <span className="text-cyan-300">NVIDIA GPU</span></div>
+              <div>• Depends entirely on your computer hardware</div>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <PrimaryBtn className="px-3 py-1.5 text-xs" onClick={onOpenSettings}>Configure Later</PrimaryBtn>
+              <a href={b.link} target="_blank" rel="noreferrer" className="text-xs px-3 py-1.5 rounded-lg bg-white/10 border border-white/10 hover:bg-white/15 text-slate-200">Docs</a>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ============================================================================
+ * Settings modal
+ * ==========================================================================*/
+function SettingsModal({ open, onClose, settings, updateSettings }) {
+  const [url, setUrl] = useState(settings.backendUrl);
+  const [model, setModel] = useState(settings.modelPath);
+  const [wfName, setWfName] = useState(settings.workflowName);
+  const [status, setStatus] = useState({ tone: "slate", text: "" });
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setUrl(settings.backendUrl); setModel(settings.modelPath); setWfName(settings.workflowName);
+    setStatus({ tone: "slate", text: "" });
+  }, [open, settings.backendUrl, settings.modelPath, settings.workflowName]);
+
+  const onWorkflow = (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const json = JSON.parse(r.result);
+        if (!isApiFormat(json)) {
+          setStatus({ tone: "amber", text: '"' + f.name + '" looks like the UI workflow format. In ComfyUI, enable Dev Mode and use "Save (API Format)".' });
+          return;
+        }
+        updateSettings({ workflow: json, workflowName: f.name });
+        setWfName(f.name);
+        setStatus({ tone: "emerald", text: "Workflow loaded: " + f.name + " (" + Object.keys(json).length + " nodes)." });
+      } catch (err) {
+        setStatus({ tone: "rose", text: "Could not parse workflow JSON: " + err.message });
+      }
+    };
+    r.readAsText(f); e.target.value = "";
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setStatus({ tone: "slate", text: "Testing " + url + " …" });
+    const r = await comfyTest(url);
+    setTesting(false);
+    if (r.ok) setStatus({ tone: "emerald", text: "Connected ✓ (" + ((r.data && r.data.system && r.data.system.os) || "ComfyUI") + " reachable)" });
+    else setStatus({ tone: "rose", text: r.error });
+  };
+
+  const save = () => {
+    updateSettings({ backendUrl: url, modelPath: model });
+    setStatus({ tone: "emerald", text: "Settings saved locally." });
+  };
+
+  if (!open) return null;
+  const colors = { slate: "text-slate-300", emerald: "text-emerald-300", amber: "text-amber-300", rose: "text-rose-300" };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900/80 backdrop-blur-xl border border-white/20 shadow-[0_0_40px_rgba(139,92,246,0.25)] rounded-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-white">Local AI Settings</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-lg w-7 h-7 rounded-full hover:bg-white/10">×</button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          <label className="block">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Local backend URL</div>
+            <input value={url} onChange={e => setUrl(e.target.value)} placeholder="http://localhost:8188" className={inputCls} />
+          </label>
+
+          <label className="block cursor-pointer">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Workflow JSON</div>
+            <div className="rounded-lg border border-dashed border-white/15 hover:border-violet-400/50 hover:bg-white/5 p-3 text-center text-slate-300 transition">
+              <span className="text-violet-300">⬆</span> {wfName || "Upload ComfyUI workflow JSON (API Format)"}
+            </div>
+            <input type="file" accept="application/json" className="hidden" onChange={onWorkflow} />
+          </label>
+
+          <label className="block">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Model path</div>
+            <input value={model} onChange={e => setModel(e.target.value)} placeholder="C:\\models\\my_model.safetensors" className={inputCls} />
+          </label>
+
+          <div className="flex gap-2">
+            <SecondaryBtn className="flex-1" onClick={test} disabled={testing}>
+              {testing && <span className="w-3 h-3 border-2 border-white/70 border-t-transparent rounded-full animate-spin" />}
+              {testing ? "Testing…" : "Test Connection"}
+            </SecondaryBtn>
+            <PrimaryBtn className="flex-1" onClick={save}>Save Settings</PrimaryBtn>
+          </div>
+
+          {settings.workflow && (
+            <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-400/30 rounded-lg p-2">
+              Workflow in memory: <span className="font-medium">{settings.workflowName || "unnamed"}</span> · {Object.keys(settings.workflow).length} nodes
+            </div>
+          )}
+          {status.text && <div className={"text-xs " + (colors[status.tone] || colors.slate) + " bg-white/5 border border-white/10 rounded-lg p-2 whitespace-pre-wrap"}>{status.text}</div>}
+
+          <p className="text-xs text-slate-400">
+            Calls go to <span className="text-slate-200">{url || "(unset)"}</span> on your own machine — no paid APIs. If Test fails, launch ComfyUI with <code className="text-violet-300">--enable-cors-header &quot;*&quot;</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * ROOT App
+ * ==========================================================================*/
+export default function App() {
+  const [theme, setTheme] = useState("dark");
+  const [openSettings, setOpenSettings] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const [settings, setSettings] = useState(() => ({
+    backendUrl:   (typeof localStorage !== "undefined" && localStorage.getItem("laias.backendUrl")) || DEFAULT_URL,
+    modelPath:    (typeof localStorage !== "undefined" && localStorage.getItem("laias.modelPath")) || "",
+    workflow:     (() => { try { return JSON.parse(localStorage.getItem("laias.workflow") || "null"); } catch { return null; } })(),
+    workflowName: (typeof localStorage !== "undefined" && localStorage.getItem("laias.workflowName")) || "",
+  }));
+  const updateSettings = (patch) => setSettings(s => {
+    const next = { ...s, ...patch };
+    if (patch.backendUrl   !== undefined) localStorage.setItem("laias.backendUrl",   next.backendUrl);
+    if (patch.modelPath    !== undefined) localStorage.setItem("laias.modelPath",    next.modelPath);
+    if (patch.workflow     !== undefined) localStorage.setItem("laias.workflow",     JSON.stringify(next.workflow));
+    if (patch.workflowName !== undefined) localStorage.setItem("laias.workflowName", next.workflowName);
+    return next;
+  });
+
+  const scrollTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
+
+  return (
+    <div className="relative min-h-screen text-white bg-gradient-to-br from-slate-950 via-[#10182b] to-[#1a1033]">
+      <div className="fixed inset-0 overflow-hidden pointer-events-none" aria-hidden>
+        <div className="absolute -top-32 -left-32 w-[28rem] h-[28rem] bg-violet-600/25 rounded-full blur-[110px]" />
+        <div className="absolute top-1/3 -right-32 w-[28rem] h-[28rem] bg-cyan-500/20 rounded-full blur-[110px]" />
+        <div className="absolute bottom-0 left-1/3 w-[28rem] h-[28rem] bg-fuchsia-500/15 rounded-full blur-[120px]" />
+      </div>
+
+      <div className="relative">
+        <Navbar theme={theme} setTheme={setTheme} onOpenSettings={() => setOpenSettings(true)} />
+        <Hero />
+        <section id="studio" className="max-w-7xl mx-auto px-4 md:px-6 pb-4">
+          <CreationPanel settings={settings} onOpenSettings={() => setOpenSettings(true)} onScrollTo={scrollTo} result={result} setResult={setResult} />
+        </section>
+        <StickmanBuilder />
+        <LocalAISetup onOpenSettings={() => setOpenSettings(true)} />
+        <footer className="border-t border-white/10 mt-6">
+          <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
+            <div>© Local AI Animation Studio · Frontend-only build · No data leaves your browser.</div>
+            <div className="flex gap-2">
+              <Badge tone="violet">Demo Mode</Badge>
+              <Badge tone="cyan">Local AI: Coming Soon</Badge>
+              <Badge tone="amber">Hardware-dependent</Badge>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+      <SettingsModal open={openSettings} onClose={() => setOpenSettings(false)} settings={settings} updateSettings={updateSettings} />
+    </div>
+  );
+}

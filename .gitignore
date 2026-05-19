@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-ssr
+.vite
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+
+# unrelated nested project
+Animiko/

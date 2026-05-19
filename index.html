@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10182b" />
+    <title>Local AI Animation Studio</title>
+    <!-- gif.js encoder (utility for Animated GIF export). Worker URL is referenced inside the app. -->
+    <script src="https://cdn.jsdelivr.net/gh/jnordberg/gif.js@0.2.0/dist/gif.js"></script>
+  </head>
+  <body>
+    <div id="root">
+      <!-- Fallback shown before React mounts -->
+      <div style="min-height:100vh;padding:32px;color:#fff;font-family:system-ui,sans-serif;background:linear-gradient(135deg,#020617,#10182b,#1a1033)">
+        <h1 style="font-size:22px;font-weight:700">Local AI Animation Studio</h1>
+        <p style="color:#cbd5e1;margin-top:4px">Loading…</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
