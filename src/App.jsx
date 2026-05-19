@@ -415,19 +415,16 @@ function getShapeLocalBounds(type, w, h) {
     case "ears":     // two stroked ellipses placed at the edges (extent ±hw, ±hh)
       return sym(hw, hh);
 
-    case "mouth": {  // stroked arc — solve analytically
+    case "mouth": {  // stroked arc — drawn symmetrically about the origin
       const ry = Math.max(hh, 4);
-      // Arc from 0.15π → 0.85π around centre (0, -hh*0.2).
-      // y_min at endpoints (sin 0.15π), y_max at peak (sin 0.5π = 1).
-      const yMin = -hh * 0.2 + ry * Math.sin(0.15 * Math.PI);
-      const yMax = -hh * 0.2 + ry;
-      const yMid = (yMin + yMax) / 2;
-      const yExt = (yMax - yMin) / 2;
-      // x extent: max |cos(angle)| over arc = cos(0.15π).
+      // Painted arc (in arc-center coords) spans y ∈ [ry·sin(0.15π), ry].
+      // The arc center is shifted by -(sin(0.15π) + 1) / 2 · ry so the
+      // painted region is centered on y = 0.
+      const yExt = ((1 - Math.sin(0.15 * Math.PI)) / 2) * ry;
       const xExt = hw * Math.cos(0.15 * Math.PI);
       return {
         x: -xExt - s2,
-        y: yMid - yExt - s2,
+        y: -yExt - s2,
         w: 2 * xExt + PART_STROKE,
         h: 2 * yExt + PART_STROKE,
       };
@@ -536,11 +533,17 @@ function drawBuiltinPart(ctx, type, w, h) {
       break;
     }
 
-    case "mouth":
+    case "mouth": {
+      // Arc spans 0.15π → 0.85π. Shifting the ellipse center upward by
+      // (sin(0.15π) + 1) / 2 · ry puts the painted arc symmetrically about
+      // y = 0 so the selection box wraps it evenly on all sides.
+      const ry = Math.max(hh, 4);
+      const yShift = -((Math.sin(0.15 * Math.PI) + 1) / 2) * ry;
       ctx.beginPath();
-      ctx.ellipse(0, -hh * 0.2, hw, Math.max(hh, 4), 0, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.ellipse(0, yShift, hw, ry, 0, 0.15 * Math.PI, 0.85 * Math.PI);
       ctx.stroke();
       break;
+    }
 
     case "body":
       ctx.beginPath();
