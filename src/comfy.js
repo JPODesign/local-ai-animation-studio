@@ -17,7 +17,10 @@
  *   Dev Mode, then use "Save (API Format)".
  * ===========================================================================*/
 
-const DEFAULT_URL = "http://localhost:8188";
+// Default to 127.0.0.1 (per user spec). http://localhost:8188 also works —
+// both are browser-trusted "potentially trustworthy" origins that bypass
+// the HTTPS-only mixed-content block.
+const DEFAULT_URL = "http://127.0.0.1:8188";
 
 const clientId =
   (typeof crypto !== "undefined" && crypto.randomUUID && crypto.randomUUID()) ||
@@ -146,6 +149,8 @@ export async function generate({ backendUrl, workflow, prompt, imageFile, onProg
 
   onProgress && onProgress({ stage: "queuing workflow" });
   const queued = await queuePrompt(backendUrl, patched);
+  // Surface the prompt id to the UI so it can show "ComfyUI accepted job <id>".
+  onProgress && onProgress({ stage: "queued", promptId: queued.prompt_id });
 
   const result = await waitForResult(backendUrl, queued.prompt_id, onProgress);
 

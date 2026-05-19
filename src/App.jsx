@@ -138,6 +138,7 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
+  const [pendingPromptId, setPendingPromptId] = useState(null); // ComfyUI prompt_id once it accepts the job
   const [errorMessage, setErrorMessage] = useState(null);  // Local AI backend / generation error shown in the result panel
   // Single uploaded media item per spec: { file, name, type, url } | null
   const [uploaded, setUploaded] = useState(null);
@@ -182,19 +183,29 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
     }
 
     // ---------- LOCAL AI MODE ----------
-    // Never falls back to the demo city. Either succeeds, or shows an
-    // explicit error in the Animation Results panel with prompt + upload.
-    if (!settings.workflow || !settings.backendUrl) {
+    // Never falls back to the demo city. Refuses with a precise message
+    // based on what's actually missing (per spec):
+    //   - explicit "disconnected" from last Test → ask for Test Connection
+    //   - connected but no workflow            → ask for workflow upload
+    //   - untested + no workflow               → ask for workflow upload
+    //   - otherwise                            → attempt; connector will
+    //                                            test connection itself
+    if (connection && connection.status === "disconnected") {
+      setResult(null);
+      setErrorMessage("Local AI backend is not connected. Start ComfyUI locally, then click Test Connection.");
+      return;
+    }
+    if (!settings.workflow) {
       setResult(null);
       setErrorMessage(
-        "Local AI backend is not connected. Start ComfyUI locally, then connect it in Local AI Setup.\n\n" +
-        (!settings.backendUrl ? "Missing backend URL. " : "") +
-        (!settings.workflow   ? "No workflow JSON loaded — open Settings → Local AI to upload one." : "")
+        connection && connection.status === "connected"
+          ? "ComfyUI is connected, but no workflow JSON is loaded yet. Upload a workflow JSON in Local AI Setup."
+          : "No workflow JSON loaded yet. Upload one in Local AI Setup, then click Test Connection."
       );
       return;
     }
 
-    setBusy(true); setStage("connecting"); setResult(null);
+    setBusy(true); setStage("connecting"); setResult(null); setPendingPromptId(null);
     try {
       const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
       // ===== ACTUAL CALL TO THE LOCAL BACKEND =====
@@ -205,19 +216,30 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
         workflow:   settings.workflow,
         prompt,
         imageFile:  imgFile,
-        onProgress: ({ stage }) => setStage(stage || ""),
+        onProgress: (ev) => {
+          if (ev && ev.stage)    setStage(ev.stage);
+          if (ev && ev.promptId) setPendingPromptId(ev.promptId);
+        },
       });
-      setResult({ kind: "comfy", outputs: out.outputs, prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
+      setResult({
+        kind: "comfy",
+        outputs: out.outputs,
+        promptId: out.promptId,
+        prompt, style, model,
+        generatedAt: new Date().toLocaleTimeString(),
+      });
     } catch (e) {
       const msg = (e && e.message) || String(e);
       const isConnectionError = msg.indexOf("Cannot reach ComfyUI") >= 0 || msg.indexOf("Failed to fetch") >= 0;
       setErrorMessage(
         isConnectionError
-          ? "Local AI backend is not connected. Start ComfyUI locally, then connect it in Local AI Setup.\n\n" + msg
+          ? "Local AI backend is not connected. Start ComfyUI locally, then click Test Connection.\n\n" +
+            "If ComfyUI is already running, this may be a CORS issue — re-launch it with --enable-cors-header \"*\".\n\n" +
+            msg
           : "Local AI generation failed:\n\n" + msg
       );
     } finally {
-      setBusy(false); setStage("");
+      setBusy(false); setStage(""); setPendingPromptId(null);
     }
   };
 
@@ -341,7 +363,7 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
         <InnerCard className="overflow-hidden">
           <div className="canvas-bg aspect-video flex items-center justify-center">
             {busy ? (
-              <BusyLoader model={model} stage={stage} prompt={prompt} />
+              <BusyLoader model={model} stage={stage} prompt={prompt} promptId={pendingPromptId} />
             ) : errorMessage ? (
               /* Local AI failure — replaces the panel. NEVER falls back to
                  a demo city. Shows the error, the prompt, and the upload
@@ -531,18 +553,24 @@ function CleanPlaceholder({ hasPrompt, prompt, model, settings, connection }) {
 
 // Loading view shown during the 3-second demo render OR while waiting on
 // the local AI backend. Model-aware copy: Demo Mode says "no GPU used",
-// Local AI says "Sending prompt to local AI backend…".
-function BusyLoader({ model, stage, prompt }) {
+// Local AI says "Sending prompt to ComfyUI…" and shows the prompt id
+// once the queue accepts the job.
+function BusyLoader({ model, stage, prompt, promptId }) {
   const isDemo = model === "demo";
   return (
     <div className="text-center p-6 max-w-md">
       <div className="w-10 h-10 mx-auto mb-3 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
       <div className="text-slate-200">
-        {isDemo ? (stage || "Rendering demo result…") : "Sending prompt to local AI backend…"}
+        {isDemo ? (stage || "Rendering demo result…") : "Sending prompt to ComfyUI…"}
       </div>
       <div className={"text-xs mt-1 " + (isDemo ? "text-amber-200/80" : "text-slate-400")}>
-        {isDemo ? "Demo Mode — no GPU used, no real generation" : (stage || "Talking to ComfyUI…")}
+        {isDemo ? "Demo Mode — no GPU used, no real generation" : ("Stage: " + (stage || "talking to ComfyUI"))}
       </div>
+      {promptId && (
+        <div className="text-xs text-cyan-300 mt-2 font-mono break-all">
+          ✓ ComfyUI accepted job: {promptId}
+        </div>
+      )}
       {prompt && prompt.trim() && (
         <div className="text-xs text-slate-400 mt-3 italic line-clamp-3">“{prompt}”</div>
       )}
@@ -1699,11 +1727,12 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
               type="url"
               value={settings.backendUrl}
               onChange={e => updateSettings({ backendUrl: e.target.value })}
-              placeholder="http://localhost:8188"
+              placeholder="http://127.0.0.1:8188"
               className={inputCls + " font-mono text-sm"}
             />
             <div className="text-xs text-slate-400 mt-1">
-              Default: <span className="font-mono text-slate-300">http://localhost:8188</span> · this is ComfyUI's default port
+              Default: <span className="font-mono text-slate-300">http://127.0.0.1:8188</span>{" "}
+              · <span className="font-mono text-slate-300">http://localhost:8188</span> also works
             </div>
           </label>
 
@@ -1726,7 +1755,8 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
               <button onClick={clearWorkflow} className="mt-1 text-[11px] text-rose-300 hover:text-rose-200 underline">Remove workflow</button>
             )}
             <div className="text-xs text-slate-400 mt-1">
-              In ComfyUI: enable <span className="text-slate-300">Dev mode</span>, then use <span className="text-slate-300">"Save (API Format)"</span> to export.
+              Export your workflow from ComfyUI as <span className="text-slate-300">API JSON</span>, then upload it here.
+              Enable <span className="text-slate-300">Dev mode</span> in ComfyUI settings first, then use <span className="text-slate-300">"Save (API Format)"</span>.
             </div>
           </div>
 
@@ -1769,7 +1799,7 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
               </div>
             </li>
             <li>
-              Open <code className="text-xs bg-black/30 px-1 py-0.5 rounded">http://localhost:8188</code> to verify it works
+              Open <code className="text-xs bg-black/30 px-1 py-0.5 rounded">http://127.0.0.1:8188</code> (or <code className="text-xs bg-black/30 px-1 py-0.5 rounded">localhost:8188</code>) to verify it works
             </li>
             <li>
               Paste that URL into the field on the left → click <span className="text-violet-300">Test Connection</span>
@@ -1807,6 +1837,33 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
             </div>
           </Card>
         ))}
+      </div>
+
+      {/* ============ Local Proxy Setup (placeholder) ============ */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold text-white mb-3">Local Proxy Setup <Badge tone="slate">Coming Soon</Badge></h3>
+        <Card>
+          <div className="text-sm text-slate-300 space-y-2">
+            <p>
+              If <strong>Test Connection</strong> fails even with ComfyUI running, the browser is most
+              likely refusing the cross-origin call (CORS). The cleanest fix is to relaunch ComfyUI with{" "}
+              <code className="text-xs bg-black/30 px-1 py-0.5 rounded">--enable-cors-header "*"</code>.
+            </p>
+            <p className="text-slate-400">
+              If for some reason that's not an option (older ComfyUI build, embedded environment, etc.),
+              a small local proxy server can sit in front of ComfyUI and add the CORS headers.
+              We don't ship one yet — this slot is a placeholder for that.
+            </p>
+            <div className="mt-2 rounded-lg bg-rose-500/10 border border-rose-400/30 p-3 text-xs text-rose-100">
+              <strong>If you see this message in the result panel:</strong>{" "}
+              <em>"Browser cannot access ComfyUI because of CORS. A small local proxy may be needed."</em>{" "}
+              — that's the case described above. Try the CORS flag first; the proxy is the fallback.
+            </div>
+            <div className="text-xs text-slate-400 italic">
+              No proxy server is built yet — this section will be wired up once it's needed.
+            </div>
+          </div>
+        </Card>
       </div>
     </section>
   );
@@ -1945,11 +2002,18 @@ export default function App() {
   // AI Setup panel, and the idle CleanPlaceholder.
   const [connection, setConnection] = useState({ status: "untested", message: "" });
   const runConnectionTest = async () => {
-    setConnection({ status: "testing", message: "Pinging " + settings.backendUrl + "…" });
+    setConnection({ status: "testing", message: "Pinging " + settings.backendUrl + " …" });
     const r = await comfyTest(settings.backendUrl);
-    setConnection(r.ok
-      ? { status: "connected",    message: "Connected ✓ — ComfyUI reachable at " + settings.backendUrl }
-      : { status: "disconnected", message: r.error });
+    if (r.ok) {
+      setConnection({ status: "connected", message: "ComfyUI connected — " + settings.backendUrl });
+    } else {
+      // fetch() throws on either "ComfyUI not running" OR a CORS preflight
+      // rejection; the browser doesn't distinguish. Mention both.
+      setConnection({
+        status: "disconnected",
+        message: "ComfyUI is not running or blocked. Start run_cpu.bat or run_nvidia_gpu.bat.\n\n" + r.error,
+      });
+    }
   };
 
   const scrollTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
