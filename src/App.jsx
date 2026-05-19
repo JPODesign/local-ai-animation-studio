@@ -1,5 +1,51 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import ComfyClient, { testConnection as comfyTest, generate as comfyGenerate, isApiFormat, DEFAULT_URL } from "./comfy.js";
+import ComfyClient, { testConnection as comfyTest, generate as comfyGenerate, checkResult as comfyCheck, isApiFormat, DEFAULT_URL } from "./comfy.js";
+
+// ----------------------------------------------------------------------------
+// Built-in test workflow — the standard SD 1.5 text-to-image graph that ships
+// with ComfyUI. We use it for "Create Test Workflow" so a brand-new user can
+// confirm the round-trip (prompt → /prompt → prompt_id → /history) works
+// before they bring their own workflow. Node 6 is the positive CLIPTextEncode
+// where Animiko injects the user's prompt; Node 7 is the negative.
+// ----------------------------------------------------------------------------
+const TEST_WORKFLOW = {
+  "3": {
+    inputs: { seed: 8566257, steps: 20, cfg: 8, sampler_name: "euler", scheduler: "normal", denoise: 1,
+              model: ["4", 0], positive: ["6", 0], negative: ["7", 0], latent_image: ["5", 0] },
+    class_type: "KSampler",
+    _meta: { title: "KSampler" },
+  },
+  "4": {
+    inputs: { ckpt_name: "v1-5-pruned-emaonly.ckpt" },
+    class_type: "CheckpointLoaderSimple",
+    _meta: { title: "Load Checkpoint" },
+  },
+  "5": {
+    inputs: { width: 512, height: 512, batch_size: 1 },
+    class_type: "EmptyLatentImage",
+    _meta: { title: "Empty Latent Image" },
+  },
+  "6": {
+    inputs: { text: "a photo of a cat", clip: ["4", 1] },
+    class_type: "CLIPTextEncode",
+    _meta: { title: "CLIP Text Encode (Prompt)" },
+  },
+  "7": {
+    inputs: { text: "watermark, text, blurry, low quality", clip: ["4", 1] },
+    class_type: "CLIPTextEncode",
+    _meta: { title: "CLIP Text Encode (Negative)" },
+  },
+  "8": {
+    inputs: { samples: ["3", 0], vae: ["4", 2] },
+    class_type: "VAEDecode",
+    _meta: { title: "VAE Decode" },
+  },
+  "9": {
+    inputs: { filename_prefix: "Animiko", images: ["8", 0] },
+    class_type: "SaveImage",
+    _meta: { title: "Save Image" },
+  },
+};
 
 /* ============================================================================
  * ANIMIKO — premium glassmorphism AI animation studio
@@ -206,6 +252,9 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
     }
 
     setBusy(true); setStage("connecting"); setResult(null); setPendingPromptId(null);
+    // Captured locally so the catch block can read the latest value even
+    // though setPendingPromptId is async.
+    let receivedPromptId = null;
     try {
       const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
       // ===== ACTUAL CALL TO THE LOCAL BACKEND =====
@@ -218,7 +267,7 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
         imageFile:  imgFile,
         onProgress: (ev) => {
           if (ev && ev.stage)    setStage(ev.stage);
-          if (ev && ev.promptId) setPendingPromptId(ev.promptId);
+          if (ev && ev.promptId) { receivedPromptId = ev.promptId; setPendingPromptId(ev.promptId); }
         },
       });
       setResult({
@@ -229,6 +278,17 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
         generatedAt: new Date().toLocaleTimeString(),
       });
     } catch (e) {
+      // Polling timed out — the job is queued in ComfyUI and may still
+      // complete. Show the user a "queued" state with a Refresh button.
+      if (e && e.code === "POLL_TIMEOUT" && receivedPromptId) {
+        setResult({
+          kind: "queued",
+          promptId: receivedPromptId,
+          prompt, style, model,
+          generatedAt: new Date().toLocaleTimeString(),
+        });
+        return;
+      }
       const msg = (e && e.message) || String(e);
       const isConnectionError = msg.indexOf("Cannot reach ComfyUI") >= 0 || msg.indexOf("Failed to fetch") >= 0;
       setErrorMessage(
@@ -240,6 +300,32 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
       );
     } finally {
       setBusy(false); setStage(""); setPendingPromptId(null);
+    }
+  };
+
+  // "Check Output Now" button on the queued result view.
+  const refreshQueued = async () => {
+    if (!result || result.kind !== "queued" || !result.promptId) return;
+    setBusy(true); setStage("checking /history/" + result.promptId);
+    try {
+      const check = await comfyCheck(settings.backendUrl, result.promptId);
+      if (check.status === "ready") {
+        setResult({
+          kind: "comfy",
+          outputs: check.outputs,
+          promptId: result.promptId,
+          prompt: result.prompt, style: result.style, model: result.model,
+          generatedAt: new Date().toLocaleTimeString(),
+        });
+      } else if (check.status === "pending") {
+        // Still no output — keep the queued state, just refresh the timestamp.
+        setResult({ ...result, generatedAt: new Date().toLocaleTimeString() });
+      } else {
+        setErrorMessage("Could not reach ComfyUI: " + check.error);
+        setResult(null);
+      }
+    } finally {
+      setBusy(false); setStage("");
     }
   };
 
@@ -378,6 +464,10 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
               /* PRIORITY 1: real generated output from the local backend
                  wins over uploaded input. */
               <ComfyResult result={result} />
+            ) : result && result.kind === "queued" ? (
+              /* ComfyUI accepted the job but our 30s poll window expired.
+                 Show prompt_id + "Check Output Now" refresh button. */
+              <QueuedView result={result} prompt={prompt} uploaded={uploaded} onRefresh={refreshQueued} />
             ) : uploaded ? (
               /* PRIORITY 2: uploaded media preview. */
               <MediaPreview
@@ -611,6 +701,40 @@ function LocalAIErrorView({ message, prompt, uploaded, onRemoveUpload }) {
           <span className="text-cyan-300 font-medium mr-1">prompt:</span><span className="italic">{prompt}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// Shown when ComfyUI accepted the /prompt POST but our 30s poll window
+// elapsed without the job appearing in /history. The job may still be
+// running on the server — user can hit "Check Output Now" to re-poll.
+function QueuedView({ result, prompt, uploaded, onRefresh }) {
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 text-center">
+      <div className="rounded-xl bg-cyan-500/15 border border-cyan-400/40 px-4 py-3 max-w-md">
+        <div className="font-semibold text-cyan-100 mb-1">✓ ComfyUI job queued</div>
+        <div className="text-xs text-cyan-100/80">
+          Queued successfully. Output polling will continue when you click <em>Check Output Now</em>.
+        </div>
+      </div>
+      <div className="text-xs font-mono text-cyan-200 bg-black/40 px-3 py-2 rounded break-all">
+        prompt_id: {result.promptId}
+      </div>
+      <button
+        onClick={onRefresh}
+        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 shadow-lg shadow-violet-900/40 text-sm"
+      >
+        🔄 Check Output Now
+      </button>
+      {uploaded && (
+        <div className="text-xs text-slate-400">Input: <span className="text-slate-300">{uploaded.name}</span></div>
+      )}
+      {prompt && prompt.trim() && (
+        <div className="text-xs text-slate-300 max-w-md whitespace-pre-wrap">
+          <span className="text-cyan-300 font-medium mr-1">prompt:</span><span className="italic">{prompt}</span>
+        </div>
+      )}
+      <div className="text-[11px] text-slate-500">last checked {result.generatedAt}</div>
     </div>
   );
 }
@@ -1689,6 +1813,17 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
   };
   const clearWorkflow = () => updateSettings({ workflow: null, workflowName: "" });
 
+  // "Create Test Workflow" — drops in a standard SD 1.5 text-to-image graph
+  // so the user can confirm the round-trip works before bringing their own.
+  // Requires that the ComfyUI install has v1-5-pruned-emaonly.ckpt available;
+  // the user will get a clear ComfyUI error if it's missing.
+  const loadTestWorkflow = () => {
+    updateSettings({
+      workflow:     JSON.parse(JSON.stringify(TEST_WORKFLOW)),
+      workflowName: "animiko-test-text2img.json",
+    });
+  };
+
   const status = (connection && connection.status) || "untested";
   const statusBoxClass =
     status === "connected"    ? "bg-emerald-500/10 border-emerald-400/30 text-emerald-200" :
@@ -1772,11 +1907,20 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
               </div>
               <input type="file" accept="application/json" className="hidden" onChange={onWorkflow}/>
             </label>
-            {settings.workflow && (
-              <button onClick={clearWorkflow} className="mt-1 text-[11px] text-rose-300 hover:text-rose-200 underline">Remove workflow</button>
-            )}
-            <div className="text-xs text-slate-400 mt-1">
-              Export your workflow from ComfyUI as <span className="text-slate-300">API JSON</span>, then upload it here.
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <button
+                onClick={loadTestWorkflow}
+                className="text-xs px-3 py-1.5 rounded-lg bg-violet-500/20 border border-violet-400/40 text-violet-200 hover:bg-violet-500/30 transition"
+              >
+                ✨ Create Test Workflow
+              </button>
+              <span className="text-[11px] text-slate-400">SD 1.5 text-to-image template (needs <code className="bg-black/30 px-1 py-0.5 rounded">v1-5-pruned-emaonly.ckpt</code> in your ComfyUI models)</span>
+              {settings.workflow && (
+                <button onClick={clearWorkflow} className="text-[11px] text-rose-300 hover:text-rose-200 underline ml-auto">Remove workflow</button>
+              )}
+            </div>
+            <div className="text-xs text-slate-400 mt-2">
+              <span className="text-slate-300">Export your workflow from ComfyUI using Save API Format, then upload it here.</span>{" "}
               Enable <span className="text-slate-300">Dev mode</span> in ComfyUI settings first, then use <span className="text-slate-300">"Save (API Format)"</span>.
             </div>
           </div>

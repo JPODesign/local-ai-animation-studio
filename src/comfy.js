@@ -104,8 +104,13 @@ async function queuePrompt(url, workflow) {
   return r.json();
 }
 
-async function waitForResult(url, id, onProgress) {
-  const deadline = Date.now() + 5 * 60 * 1000;
+async function waitForResult(url, id, onProgress, opts = {}) {
+  // Poll /history/{prompt_id} every 2 s for up to 30 s by default. On
+  // timeout we throw a structured error (code "POLL_TIMEOUT") so the UI
+  // can switch to a "queued, waiting" state instead of showing an error.
+  const intervalMs = opts.intervalMs || 2000;
+  const timeoutMs  = opts.timeoutMs  || 30 * 1000;
+  const deadline   = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const r = await fetch(joinUrl(url, "/history/" + id));
@@ -116,9 +121,11 @@ async function waitForResult(url, id, onProgress) {
       }
     } catch (_) { /* transient blips are expected — keep polling */ }
     onProgress && onProgress({ stage: "rendering" });
-    await new Promise(res => setTimeout(res, 1000));
+    await new Promise(res => setTimeout(res, intervalMs));
   }
-  throw new Error("Timed out waiting for ComfyUI (5 min).");
+  const err = new Error("Polling timed out after " + (timeoutMs / 1000) + "s — the ComfyUI job may still be running on the server.");
+  err.code = "POLL_TIMEOUT";
+  throw err;
 }
 
 const viewUrl = (b, f) => {
@@ -129,6 +136,39 @@ const viewUrl = (b, f) => {
   });
   return joinUrl(b, "/view?" + qs.toString());
 };
+
+// One-shot check of /history/{prompt_id} — used by the "Refresh" button on
+// the queued result view. Returns one of:
+//   { status: "ready",   outputs: [...] }     — job completed
+//   { status: "pending" }                     — still running
+//   { status: "error",   error: "…" }         — fetch / HTTP error
+export async function checkResult(backendUrl, promptId) {
+  try {
+    const r = await fetch(joinUrl(backendUrl, "/history/" + promptId));
+    if (!r.ok) return { status: "error", error: "HTTP " + r.status + " from /history/" + promptId };
+    const j = await r.json();
+    const entry = j[promptId];
+    if (!entry || !entry.outputs || !Object.keys(entry.outputs).length) {
+      return { status: "pending" };
+    }
+    const outputs = [];
+    for (const nid of Object.keys(entry.outputs)) {
+      const out = entry.outputs[nid];
+      for (const k of ["images", "gifs", "videos"]) {
+        for (const f of (out[k] || [])) {
+          outputs.push({
+            url: viewUrl(backendUrl, f),
+            filename: f.filename,
+            mime: k === "images" ? "image/png" : k === "gifs" ? "image/gif" : "video/mp4",
+          });
+        }
+      }
+    }
+    return { status: "ready", outputs, raw: entry };
+  } catch (e) {
+    return { status: "error", error: (e && e.message) || String(e) };
+  }
+}
 
 export async function generate({ backendUrl, workflow, prompt, imageFile, onProgress }) {
   if (!backendUrl) throw new Error("No backend URL set. Open Settings → Local AI.");
