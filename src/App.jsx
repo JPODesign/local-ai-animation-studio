@@ -131,7 +131,8 @@ const STYLES = ["Cinematic", "Anime", "3D Cartoon", "Pixel Art", "Realistic", "S
 
 function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult }) {
   const [tab, setTab] = useState(TABS[0]);
-  const [prompt, setPrompt] = useState("A neon city street, slow camera pan, rainy reflections, cinematic.");
+  // No hardcoded sample prompt — the user types their own.
+  const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("demo");
   const [style, setStyle] = useState("Cinematic");
   const [pub, setPub] = useState(false);
@@ -320,9 +321,16 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
       </Card>
 
       <Card className="lg:col-span-3">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <h3 className="font-semibold text-white">Animation Results</h3>
-          <Badge tone="cyan">Preview</Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            {model !== "demo" && (
+              <Badge tone={settings.workflow ? "emerald" : "rose"}>
+                Local AI · {settings.workflow ? "ready" : "not connected"}
+              </Badge>
+            )}
+            <Badge tone="cyan">{model === "demo" ? "Demo Mode" : "Preview"}</Badge>
+          </div>
         </div>
 
         <InnerCard className="overflow-hidden">
@@ -356,8 +364,14 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
                  upload exists. Local AI modes can never reach this branch. */
               <DemoResult result={result} />
             ) : (
-              /* PRIORITY 3 + 4: prompt placeholder / empty state. */
-              <CleanPlaceholder hasPrompt={prompt.trim().length > 0} prompt={prompt} />
+              /* PRIORITY 3 + 4: prompt placeholder / empty state.
+                 Local AI gets a connection-status pill here — never a city. */
+              <CleanPlaceholder
+                hasPrompt={prompt.trim().length > 0}
+                prompt={prompt}
+                model={model}
+                settings={settings}
+              />
             )}
           </div>
         </InnerCard>
@@ -452,16 +466,42 @@ function MediaPreview({ uploaded, onRemove, prompt, badge }) {
   );
 }
 
-// Quiet idle state — text only, no fake media. Embeds the prompt when set
-// so we don't need a separate prompt card below the preview.
-function CleanPlaceholder({ hasPrompt, prompt }) {
+// Quiet idle state — text only, NEVER a hardcoded preview.
+// In Local AI mode: shows backend URL + workflow status + prompt (no demo).
+// In Demo Mode: generic copy + prompt (no city placeholder either, the
+//               demo city only renders after Generate is clicked).
+function CleanPlaceholder({ hasPrompt, prompt, model, settings }) {
+  const isLocalAI = model && model !== "demo";
+
   return (
     <div className="text-center p-8 max-w-md">
-      <div className="text-slate-300">
-        {hasPrompt
-          ? "Prompt ready — upload media or click Generate Animation to render."
-          : "Upload media and/or enter a prompt to preview your animation result."}
-      </div>
+      {isLocalAI ? (
+        <>
+          <div className="text-slate-300">
+            {hasPrompt
+              ? "Click Generate Animation to send the prompt to your local backend."
+              : "Local AI mode — write a prompt and click Generate Animation."}
+          </div>
+          <div className="mt-3 inline-flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
+            <span className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">
+              Backend:&nbsp;<span className="font-mono text-cyan-300">{(settings && settings.backendUrl) || "not set"}</span>
+            </span>
+            <span className={"px-2 py-0.5 rounded-full border " + (settings && settings.workflow
+              ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200"
+              : "bg-rose-500/15 border-rose-400/40 text-rose-200")}>
+              {settings && settings.workflow
+                ? "Workflow: " + (settings.workflowName || "loaded")
+                : "Workflow: not loaded"}
+            </span>
+          </div>
+        </>
+      ) : (
+        <div className="text-slate-300">
+          {hasPrompt
+            ? "Prompt ready — upload media or click Generate Animation to render."
+            : "Upload media and/or enter a prompt to preview your animation result."}
+        </div>
+      )}
       {hasPrompt && prompt && (
         <div className="text-xs text-slate-400 italic mt-3 max-h-24 overflow-auto px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-left">
           “{prompt}”
@@ -549,9 +589,12 @@ function DemoResult({ result }) {
         </div>
         <Badge tone="violet">Demo</Badge>
       </div>
-      <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between">
-        <div className="truncate"><span className="text-slate-400">{result.style}</span> · {result.prompt}</div>
-        <div className="text-slate-400">{result.generatedAt}</div>
+      <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between gap-3">
+        <div className="truncate">
+          <span className="text-slate-400">{result.style}</span>
+          {result.prompt && result.prompt.trim() ? <> · {result.prompt}</> : null}
+        </div>
+        <div className="text-slate-400 whitespace-nowrap">{result.generatedAt}</div>
       </div>
     </div>
   );
