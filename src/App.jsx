@@ -1713,6 +1713,25 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
         Local AI generation only works when the user runs the local backend on their own computer. The online website can connect to <span className="font-mono text-amber-200">localhost</span> only from the same user&apos;s device — there is no shared GPU server. Each visitor brings their own ComfyUI install.
       </div>
 
+      {/* ============ Hosted-site warning ============ */}
+      {typeof location !== "undefined" && location.protocol === "https:" && (
+        <div className="mb-6 rounded-2xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-100">
+          <div className="font-semibold text-rose-200 mb-1">⚠ You're on the hosted Vercel site</div>
+          <div className="text-rose-100/90">
+            For local ComfyUI, run Animiko locally with <code className="text-rose-50 bg-black/30 px-1 py-0.5 rounded font-mono">npm run dev</code>.
+            The hosted Vercel site may not be able to access <span className="font-mono text-rose-50">http://127.0.0.1:8188</span> because
+            browsers block local HTTP backends from hosted HTTPS sites (CORS / mixed-content / Private Network Access).
+          </div>
+          <div className="mt-2 text-xs text-rose-200/80">
+            Quick recipe:&nbsp;
+            <code className="bg-black/30 px-1 py-0.5 rounded font-mono">git clone …animiko</code>{" "}→{" "}
+            <code className="bg-black/30 px-1 py-0.5 rounded font-mono">npm install</code>{" "}→{" "}
+            <code className="bg-black/30 px-1 py-0.5 rounded font-mono">npm run dev</code>{" "}→ open{" "}
+            <code className="bg-black/30 px-1 py-0.5 rounded font-mono">http://localhost:5173</code>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* ============ Connection panel (inline, not a modal) ============ */}
         <Card className="lg:col-span-2">
@@ -1727,12 +1746,14 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
               type="url"
               value={settings.backendUrl}
               onChange={e => updateSettings({ backendUrl: e.target.value })}
+              onBlur={e => updateSettings({ backendUrl: e.target.value.replace(/\/+$/, "") })}
               placeholder="http://127.0.0.1:8188"
               className={inputCls + " font-mono text-sm"}
             />
             <div className="text-xs text-slate-400 mt-1">
               Default: <span className="font-mono text-slate-300">http://127.0.0.1:8188</span>{" "}
               · <span className="font-mono text-slate-300">http://localhost:8188</span> also works
+              · trailing slash trimmed
             </div>
           </label>
 
@@ -2001,17 +2022,33 @@ export default function App() {
   // didn't ask for. Surfaced in the result-card header, the inline Local
   // AI Setup panel, and the idle CleanPlaceholder.
   const [connection, setConnection] = useState({ status: "untested", message: "" });
+
+  // Normalize trailing slashes so /system_stats etc. concatenate cleanly.
+  const normalizedBackendUrl = (settings.backendUrl || "").replace(/\/+$/, "");
+
   const runConnectionTest = async () => {
-    setConnection({ status: "testing", message: "Pinging " + settings.backendUrl + " …" });
-    const r = await comfyTest(settings.backendUrl);
+    setConnection({ status: "testing", message: "Pinging " + normalizedBackendUrl + "/system_stats …" });
+    const r = await comfyTest(normalizedBackendUrl);
     if (r.ok) {
-      setConnection({ status: "connected", message: "ComfyUI connected — " + settings.backendUrl });
+      setConnection({ status: "connected", message: "ComfyUI connected — " + normalizedBackendUrl });
     } else {
       // fetch() throws on either "ComfyUI not running" OR a CORS preflight
-      // rejection; the browser doesn't distinguish. Mention both.
+      // rejection OR a Private Network Access preflight from HTTPS→127.0.0.1.
+      // The browser can't tell us which — we list the four common fixes.
+      const onHosted = typeof location !== "undefined" && location.protocol === "https:";
       setConnection({
         status: "disconnected",
-        message: "ComfyUI is not running or blocked. Start run_cpu.bat or run_nvidia_gpu.bat.\n\n" + r.error,
+        message:
+          "ComfyUI is not running or blocked by the browser.\n\n" +
+          "To fix this:\n" +
+          "  1. Make sure ComfyUI is running.\n" +
+          '  2. Start ComfyUI with  --enable-cors-header "*"\n' +
+          "  3. Run Animiko locally with  npm run dev\n" +
+          "  4. Open http://localhost:5173 and test again.\n" +
+          (onHosted
+            ? "\nYou are on the hosted Vercel site. Browsers usually block HTTPS pages from calling http://127.0.0.1 (Private Network Access). Steps 3 + 4 above are the reliable fix.\n"
+            : "") +
+          "\nUnderlying error: " + r.error,
       });
     }
   };
