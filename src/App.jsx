@@ -173,15 +173,11 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
       setBusy(true); setStage("rendering demo"); setResult(null);
       await new Promise(r => setTimeout(r, 3000));
       setBusy(false); setStage("");
-      // Demo Mode: show the user's own uploaded media as the "result" if any.
-      // Only fall back to the city placeholder when no upload exists.
+      // Demo Mode: when an upload exists, the MediaPreview already wins the
+      // render priority — just mark a "user" result so the "Generated" badge
+      // shows. When there's no upload, fall back to the demo placeholder.
       if (uploaded) {
-        setResult({
-          kind: "user",
-          media: { name: uploaded.name, type: uploaded.type, url: uploaded.url },
-          prompt, style, model,
-          generatedAt: new Date().toLocaleTimeString(),
-        });
+        setResult({ kind: "user", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
       } else {
         setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
       }
@@ -328,14 +324,24 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
                 <div className="text-slate-200">{stage ? "Local AI: " + stage + "…" : "Rendering demo result…"}</div>
                 <div className="text-xs text-slate-400 mt-1">{model === "demo" ? "Demo Mode" : "Talking to local ComfyUI backend"}</div>
               </div>
-            ) : result ? (
-              result.kind === "comfy" ? <ComfyResult result={result} />
-              : result.kind === "user"  ? <UploadedResult media={result.media} prompt={result.prompt} onRemove={removeUpload} />
-              :                           <DemoResult result={result} />
             ) : uploaded ? (
-              <MediaPreview uploaded={uploaded} onRemove={removeUpload} />
+              /* PRIORITY 1: uploaded media always wins — over demo city,
+                 sample previews, or any other hardcoded placeholder. */
+              <MediaPreview
+                uploaded={uploaded}
+                onRemove={removeUpload}
+                prompt={prompt}
+                badge={result ? "Generated" : null}
+              />
+            ) : result && result.kind === "comfy" ? (
+              /* PRIORITY 2: real generated result from the local backend. */
+              <ComfyResult result={result} />
+            ) : result && result.kind === "demo" ? (
+              /* Demo placeholder — ONLY reachable when no upload exists. */
+              <DemoResult result={result} />
             ) : (
-              <CleanPlaceholder hasPrompt={prompt.trim().length > 0} />
+              /* PRIORITY 3 + 4: prompt placeholder / empty state. */
+              <CleanPlaceholder hasPrompt={prompt.trim().length > 0} prompt={prompt} />
             )}
           </div>
         </InnerCard>
@@ -353,12 +359,6 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
                 className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
               >×</button>
             </span>
-          </div>
-        )}
-        {!busy && !result && prompt.trim() && (
-          <div className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3">
-            <div className="text-xs text-cyan-300 font-medium mb-1">Prompt</div>
-            <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">{prompt}</p>
           </div>
         )}
 
@@ -387,10 +387,16 @@ function mediaKind(m) {
   return "file";
 }
 
-// IDLE preview of the currently-uploaded file (before Generate is clicked).
-function MediaPreview({ uploaded, onRemove }) {
+// The single preview for uploaded media — used in BOTH idle and post-Generate
+// states. Uploaded media always wins over result/demo previews, so this one
+// component is everything the upload path needs:
+//   - `prompt`  : when set, overlay the prompt text at the bottom
+//   - `badge`   : when set, show a small badge in the top-right (e.g. "Generated")
+//   - falls back to showing the filename when there's no prompt overlay
+function MediaPreview({ uploaded, onRemove, prompt, badge }) {
   if (!uploaded) return null;
   const kind = mediaKind(uploaded);
+  const showPrompt = !!(prompt && prompt.trim());
   return (
     <div className="w-full h-full relative">
       {kind === "image" ? (
@@ -408,43 +414,8 @@ function MediaPreview({ uploaded, onRemove }) {
           <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{uploaded.name}</span>
         </div>
       )}
-      <button
-        onClick={onRemove}
-        title="Remove this upload"
-        aria-label="Remove uploaded media"
-        className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/70 hover:bg-rose-500/80 backdrop-blur border border-white/20 text-white flex items-center justify-center transition"
-      >×</button>
-      <div className="absolute bottom-2 left-2 right-12 text-xs text-slate-200 bg-black/60 backdrop-blur px-2 py-1 rounded truncate">
-        {uploaded.name}
-      </div>
-    </div>
-  );
-}
-
-// RESULT preview AFTER Generate is clicked in Demo Mode with uploaded media.
-// Shows the user's own media as the "animation result", with the prompt
-// overlay at the bottom and an X to remove it.
-function UploadedResult({ media, prompt, onRemove }) {
-  const kind = mediaKind(media);
-  return (
-    <div className="w-full h-full relative">
-      {kind === "image" ? (
-        <img src={media.url} alt={media.name} className="w-full h-full object-contain" />
-      ) : kind === "video" ? (
-        <video src={media.url} controls loop className="w-full h-full object-contain bg-black" />
-      ) : kind === "audio" ? (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-6">
-          <div className="text-3xl text-violet-300">🎵</div>
-          <audio src={media.url} controls className="w-full max-w-md" />
-          <div className="text-xs text-slate-400">{media.name}</div>
-        </div>
-      ) : (
-        <div className="w-full h-full flex items-center justify-center text-slate-300 text-sm p-4">
-          <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{media.name}</span>
-        </div>
-      )}
       <div className="absolute top-2 right-2 flex items-center gap-2">
-        <Badge tone="violet">Your Media</Badge>
+        {badge && <Badge tone="violet">{badge}</Badge>}
         <button
           onClick={onRemove}
           title="Remove this upload"
@@ -452,17 +423,22 @@ function UploadedResult({ media, prompt, onRemove }) {
           className="w-8 h-8 rounded-full bg-black/70 hover:bg-rose-500/80 backdrop-blur border border-white/20 text-white flex items-center justify-center transition"
         >×</button>
       </div>
-      {prompt && prompt.trim() && (
+      {showPrompt ? (
         <div className="absolute bottom-2 left-2 right-2 text-xs text-slate-200 bg-black/60 backdrop-blur px-3 py-2 rounded">
           <span className="text-cyan-300 mr-1.5 font-medium">prompt:</span>{prompt}
+        </div>
+      ) : (
+        <div className="absolute bottom-2 left-2 right-12 text-xs text-slate-200 bg-black/60 backdrop-blur px-2 py-1 rounded truncate">
+          {uploaded.name}
         </div>
       )}
     </div>
   );
 }
 
-// Quiet idle state — text only, no fake media or emoji art.
-function CleanPlaceholder({ hasPrompt }) {
+// Quiet idle state — text only, no fake media. Embeds the prompt when set
+// so we don't need a separate prompt card below the preview.
+function CleanPlaceholder({ hasPrompt, prompt }) {
   return (
     <div className="text-center p-8 max-w-md">
       <div className="text-slate-300">
@@ -470,6 +446,11 @@ function CleanPlaceholder({ hasPrompt }) {
           ? "Prompt ready — upload media or click Generate Animation to render."
           : "Upload media and/or enter a prompt to preview your animation result."}
       </div>
+      {hasPrompt && prompt && (
+        <div className="text-xs text-slate-400 italic mt-3 max-h-24 overflow-auto px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-left">
+          “{prompt}”
+        </div>
+      )}
     </div>
   );
 }
