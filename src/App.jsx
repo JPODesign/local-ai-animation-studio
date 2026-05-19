@@ -137,23 +137,26 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
-  const [files, setFiles] = useState([]);
+  // Single uploaded media item per spec: { file, name, type, url } | null
+  const [uploaded, setUploaded] = useState(null);
 
   const onUpload = (e) => {
-    const list = Array.from(e.target.files || []);
-    // Keep the original File so we can later upload it to ComfyUI's /upload/image.
-    const items = list.map(f => ({ name: f.name, url: URL.createObjectURL(f), type: f.type, file: f }));
-    setFiles(p => [...p, ...items]);
+    const f = (e.target.files || [])[0];
+    if (!f) return;
+    setUploaded(prev => {
+      // Replacing existing upload — revoke the previous blob URL.
+      if (prev && prev.url) { try { URL.revokeObjectURL(prev.url); } catch (_) {} }
+      return { file: f, name: f.name, type: f.type || "", url: URL.createObjectURL(f) };
+    });
     e.target.value = ""; // reset so the same file can be re-picked after removal
   };
-  const removeFile = (idx) => {
-    setFiles(prev => {
-      const copy = [...prev];
-      const removed = copy.splice(idx, 1)[0];
-      // Free the blob URL so the browser can reclaim memory.
-      if (removed && removed.url) { try { URL.revokeObjectURL(removed.url); } catch (_) {} }
-      return copy;
+  const removeUpload = () => {
+    setUploaded(prev => {
+      if (prev && prev.url) { try { URL.revokeObjectURL(prev.url); } catch (_) {} }
+      return null;
     });
+    // If the current result is built from this upload, clear it too.
+    setResult(prev => (prev && prev.kind === "user") ? null : prev);
   };
   const magic = () => {
     const ideas = [
@@ -170,7 +173,18 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
       setBusy(true); setStage("rendering demo"); setResult(null);
       await new Promise(r => setTimeout(r, 3000));
       setBusy(false); setStage("");
-      setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
+      // Demo Mode: show the user's own uploaded media as the "result" if any.
+      // Only fall back to the city placeholder when no upload exists.
+      if (uploaded) {
+        setResult({
+          kind: "user",
+          media: { name: uploaded.name, type: uploaded.type, url: uploaded.url },
+          prompt, style, model,
+          generatedAt: new Date().toLocaleTimeString(),
+        });
+      } else {
+        setResult({ kind: "demo", prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
+      }
       return;
     }
     if (!settings.workflow) {
@@ -186,11 +200,11 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
     }
     setBusy(true); setStage("connecting"); setResult(null);
     try {
-      const firstImage = (files.find(f => f.type && f.type.startsWith("image/")) || {}).file || null;
+      const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
       const out = await comfyGenerate({
         backendUrl: settings.backendUrl,
         workflow: settings.workflow,
-        prompt, imageFile: firstImage,
+        prompt, imageFile: imgFile,
         onProgress: ({ stage }) => setStage(stage || ""),
       });
       setResult({ kind: "comfy", outputs: out.outputs, prompt, style, model, generatedAt: new Date().toLocaleTimeString() });
@@ -237,19 +251,17 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
             <input type="file" multiple className="hidden" onChange={onUpload} />
           </div>
         </label>
-        {files.length > 0 && (
+        {uploaded && (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {files.map((f, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
-                <span className="truncate max-w-[160px]">{f.name}</span>
-                <button
-                  onClick={() => removeFile(i)}
-                  title={"Remove " + f.name}
-                  aria-label={"Remove " + f.name}
-                  className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
-                >×</button>
-              </span>
-            ))}
+            <span className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
+              <span className="truncate max-w-[160px]">{uploaded.name}</span>
+              <button
+                onClick={removeUpload}
+                title={"Remove " + uploaded.name}
+                aria-label={"Remove " + uploaded.name}
+                className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
+              >×</button>
+            </span>
           </div>
         )}
 
@@ -317,30 +329,30 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
                 <div className="text-xs text-slate-400 mt-1">{model === "demo" ? "Demo Mode" : "Talking to local ComfyUI backend"}</div>
               </div>
             ) : result ? (
-              result.kind === "comfy" ? <ComfyResult result={result} /> : <DemoResult result={result} />
-            ) : files.length > 0 ? (
-              <MediaPreview files={files} onRemove={removeFile} />
+              result.kind === "comfy" ? <ComfyResult result={result} />
+              : result.kind === "user"  ? <UploadedResult media={result.media} prompt={result.prompt} onRemove={removeUpload} />
+              :                           <DemoResult result={result} />
+            ) : uploaded ? (
+              <MediaPreview uploaded={uploaded} onRemove={removeUpload} />
             ) : (
-              <CleanPlaceholder />
+              <CleanPlaceholder hasPrompt={prompt.trim().length > 0} />
             )}
           </div>
         </InnerCard>
 
         {/* Idle inputs panel — file chips (with X) + prompt text — shown only
             when we're not busy and no result is on screen yet. */}
-        {!busy && !result && files.length > 0 && (
+        {!busy && !result && uploaded && (
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {files.map((f, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
-                <span className="truncate max-w-[200px]">{f.name}</span>
-                <button
-                  onClick={() => removeFile(i)}
-                  title={"Remove " + f.name}
-                  aria-label={"Remove " + f.name}
-                  className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
-                >×</button>
-              </span>
-            ))}
+            <span className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
+              <span className="truncate max-w-[240px]">{uploaded.name}</span>
+              <button
+                onClick={removeUpload}
+                title={"Remove " + uploaded.name}
+                aria-label={"Remove " + uploaded.name}
+                className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
+              >×</button>
+            </span>
           </div>
         )}
         {!busy && !result && prompt.trim() && (
@@ -362,55 +374,101 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
   );
 }
 
-// Preview of the most-recent uploaded file — image, video, audio, or a
-// generic name chip. Includes an X button so the user can remove it.
-function MediaPreview({ files, onRemove }) {
-  if (!files.length) return null;
-  const idx = files.length - 1;
-  const f = files[idx];
-  const isImage = f.type && f.type.startsWith("image/");
-  const isVideo = f.type && f.type.startsWith("video/");
-  const isAudio = f.type && f.type.startsWith("audio/");
+// Decide which media element to render. Triggers on:
+//   - image/*  (PNG, JPG, WebP, SVG, etc — also animated GIF)
+//   - a .gif extension even if the browser didn't set the type
+//   - video/*  (MP4, WebM, etc)
+//   - audio/*  (MP3, WAV, etc)
+function mediaKind(m) {
+  if (!m) return "none";
+  if ((m.type && m.type.startsWith("image/")) || /\.gif$/i.test(m.name || "")) return "image";
+  if (m.type && m.type.startsWith("video/")) return "video";
+  if (m.type && m.type.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+// IDLE preview of the currently-uploaded file (before Generate is clicked).
+function MediaPreview({ uploaded, onRemove }) {
+  if (!uploaded) return null;
+  const kind = mediaKind(uploaded);
   return (
     <div className="w-full h-full relative">
-      {isImage ? (
-        <img src={f.url} alt={f.name} className="w-full h-full object-contain" />
-      ) : isVideo ? (
-        <video src={f.url} controls className="w-full h-full object-contain bg-black" />
-      ) : isAudio ? (
+      {kind === "image" ? (
+        <img src={uploaded.url} alt={uploaded.name} className="w-full h-full object-contain" />
+      ) : kind === "video" ? (
+        <video src={uploaded.url} controls loop className="w-full h-full object-contain bg-black" />
+      ) : kind === "audio" ? (
         <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-6">
           <div className="text-3xl text-violet-300">🎵</div>
-          <audio src={f.url} controls className="w-full max-w-md" />
-          <div className="text-xs text-slate-400">{f.name}</div>
+          <audio src={uploaded.url} controls className="w-full max-w-md" />
+          <div className="text-xs text-slate-400">{uploaded.name}</div>
         </div>
       ) : (
         <div className="w-full h-full flex items-center justify-center text-slate-300 text-sm p-4">
-          <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{f.name}</span>
+          <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{uploaded.name}</span>
         </div>
       )}
       <button
-        onClick={() => onRemove(idx)}
+        onClick={onRemove}
         title="Remove this upload"
         aria-label="Remove uploaded media"
         className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/70 hover:bg-rose-500/80 backdrop-blur border border-white/20 text-white flex items-center justify-center transition"
       >×</button>
-      {files.length > 1 && (
-        <div className="absolute top-2 left-2"><Badge tone="violet">{files.length} files</Badge></div>
-      )}
       <div className="absolute bottom-2 left-2 right-12 text-xs text-slate-200 bg-black/60 backdrop-blur px-2 py-1 rounded truncate">
-        {f.name}
+        {uploaded.name}
       </div>
     </div>
   );
 }
 
-// Quiet idle state — no fake media, just instructions.
-function CleanPlaceholder() {
+// RESULT preview AFTER Generate is clicked in Demo Mode with uploaded media.
+// Shows the user's own media as the "animation result", with the prompt
+// overlay at the bottom and an X to remove it.
+function UploadedResult({ media, prompt, onRemove }) {
+  const kind = mediaKind(media);
+  return (
+    <div className="w-full h-full relative">
+      {kind === "image" ? (
+        <img src={media.url} alt={media.name} className="w-full h-full object-contain" />
+      ) : kind === "video" ? (
+        <video src={media.url} controls loop className="w-full h-full object-contain bg-black" />
+      ) : kind === "audio" ? (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-6">
+          <div className="text-3xl text-violet-300">🎵</div>
+          <audio src={media.url} controls className="w-full max-w-md" />
+          <div className="text-xs text-slate-400">{media.name}</div>
+        </div>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-slate-300 text-sm p-4">
+          <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{media.name}</span>
+        </div>
+      )}
+      <div className="absolute top-2 right-2 flex items-center gap-2">
+        <Badge tone="violet">Your Media</Badge>
+        <button
+          onClick={onRemove}
+          title="Remove this upload"
+          aria-label="Remove uploaded media"
+          className="w-8 h-8 rounded-full bg-black/70 hover:bg-rose-500/80 backdrop-blur border border-white/20 text-white flex items-center justify-center transition"
+        >×</button>
+      </div>
+      {prompt && prompt.trim() && (
+        <div className="absolute bottom-2 left-2 right-2 text-xs text-slate-200 bg-black/60 backdrop-blur px-3 py-2 rounded">
+          <span className="text-cyan-300 mr-1.5 font-medium">prompt:</span>{prompt}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Quiet idle state — text only, no fake media or emoji art.
+function CleanPlaceholder({ hasPrompt }) {
   return (
     <div className="text-center p-8 max-w-md">
-      <div className="text-white font-medium">No media uploaded yet</div>
-      <div className="text-sm text-slate-400 mt-1">
-        Upload an image, video, or audio file on the left — or just write a prompt — then click <span className="text-violet-300">Generate Animation</span>.
+      <div className="text-slate-300">
+        {hasPrompt
+          ? "Prompt ready — upload media or click Generate Animation to render."
+          : "Upload media and/or enter a prompt to preview your animation result."}
       </div>
     </div>
   );
