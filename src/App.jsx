@@ -992,22 +992,18 @@ function StickmanBuilder() {
     }));
   };
 
-  // Duplicate all selected parts (fresh IDs, offset +15px), then move selection
-  // onto the new copies so the user can immediately reposition them.
+  // Duplicate every selected part (fresh IDs, +15px offset), then move
+  // selection onto the new copies. Copies and IDs are computed BEFORE the
+  // setFrames updater so a StrictMode double-invocation can't double-push.
   const duplicateSelected = () => {
     if (!selectedIds.length) return;
-    const idSet = new Set(selectedIds);
-    const newIds = [];
-    setFrames(fs => fs.map((f, i) => {
-      if (i !== active) return f;
-      const copies = f.parts.filter(p => idSet.has(p.id)).map(p => {
-        const np = { ...p, id: crypto.randomUUID(), x: p.x + 15, y: p.y + 15 };
-        newIds.push(np.id);
-        return np;
-      });
-      return { ...f, parts: [...f.parts, ...copies] };
-    }));
-    if (newIds.length) setSelectedIds(newIds);
+    const idSet  = new Set(selectedIds);
+    const sources = frame.parts.filter(p => idSet.has(p.id));
+    if (!sources.length) return;
+    const copies  = sources.map(p => ({ ...p, id: crypto.randomUUID(), x: p.x + 15, y: p.y + 15 }));
+    const newIds  = copies.map(c => c.id);
+    setFrames(fs => fs.map((f, i) => i === active ? { ...f, parts: [...f.parts, ...copies] } : f));
+    setSelectedIds(newIds);
   };
 
   const deleteSelected = () => {
