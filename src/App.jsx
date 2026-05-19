@@ -141,8 +141,19 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
 
   const onUpload = (e) => {
     const list = Array.from(e.target.files || []);
+    // Keep the original File so we can later upload it to ComfyUI's /upload/image.
     const items = list.map(f => ({ name: f.name, url: URL.createObjectURL(f), type: f.type, file: f }));
     setFiles(p => [...p, ...items]);
+    e.target.value = ""; // reset so the same file can be re-picked after removal
+  };
+  const removeFile = (idx) => {
+    setFiles(prev => {
+      const copy = [...prev];
+      const removed = copy.splice(idx, 1)[0];
+      // Free the blob URL so the browser can reclaim memory.
+      if (removed && removed.url) { try { URL.revokeObjectURL(removed.url); } catch (_) {} }
+      return copy;
+    });
   };
   const magic = () => {
     const ideas = [
@@ -227,8 +238,18 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
           </div>
         </label>
         {files.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {files.map((f, i) => <span key={i} className="text-xs px-2 py-1 rounded bg-white/5 text-slate-300 border border-white/10">{f.name}</span>)}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {files.map((f, i) => (
+              <span key={i} className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
+                <span className="truncate max-w-[160px]">{f.name}</span>
+                <button
+                  onClick={() => removeFile(i)}
+                  title={"Remove " + f.name}
+                  aria-label={"Remove " + f.name}
+                  className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
+                >×</button>
+              </span>
+            ))}
           </div>
         )}
 
@@ -297,15 +318,37 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
               </div>
             ) : result ? (
               result.kind === "comfy" ? <ComfyResult result={result} /> : <DemoResult result={result} />
+            ) : files.length > 0 ? (
+              <MediaPreview files={files} onRemove={removeFile} />
             ) : (
-              <div className="text-center p-8">
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-violet-900/40 text-2xl">🎬</div>
-                <div className="mt-3 text-white font-medium">No animation yet</div>
-                <div className="text-sm text-slate-400">Click <span className="text-violet-300">Generate Animation</span> to see a demo.</div>
-              </div>
+              <CleanPlaceholder />
             )}
           </div>
         </InnerCard>
+
+        {/* Idle inputs panel — file chips (with X) + prompt text — shown only
+            when we're not busy and no result is on screen yet. */}
+        {!busy && !result && files.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {files.map((f, i) => (
+              <span key={i} className="inline-flex items-center gap-1.5 text-xs pl-2 pr-1 py-1 rounded-full bg-white/5 text-slate-200 border border-white/10">
+                <span className="truncate max-w-[200px]">{f.name}</span>
+                <button
+                  onClick={() => removeFile(i)}
+                  title={"Remove " + f.name}
+                  aria-label={"Remove " + f.name}
+                  className="w-4 h-4 rounded-full bg-white/10 hover:bg-rose-500/70 text-slate-300 hover:text-white inline-flex items-center justify-center leading-none"
+                >×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {!busy && !result && prompt.trim() && (
+          <div className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3">
+            <div className="text-xs text-cyan-300 font-medium mb-1">Prompt</div>
+            <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">{prompt}</p>
+          </div>
+        )}
 
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
           {exportActions.map(b => (
@@ -315,6 +358,60 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
           ))}
         </div>
       </Card>
+    </div>
+  );
+}
+
+// Preview of the most-recent uploaded file — image, video, audio, or a
+// generic name chip. Includes an X button so the user can remove it.
+function MediaPreview({ files, onRemove }) {
+  if (!files.length) return null;
+  const idx = files.length - 1;
+  const f = files[idx];
+  const isImage = f.type && f.type.startsWith("image/");
+  const isVideo = f.type && f.type.startsWith("video/");
+  const isAudio = f.type && f.type.startsWith("audio/");
+  return (
+    <div className="w-full h-full relative">
+      {isImage ? (
+        <img src={f.url} alt={f.name} className="w-full h-full object-contain" />
+      ) : isVideo ? (
+        <video src={f.url} controls className="w-full h-full object-contain bg-black" />
+      ) : isAudio ? (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-6">
+          <div className="text-3xl text-violet-300">🎵</div>
+          <audio src={f.url} controls className="w-full max-w-md" />
+          <div className="text-xs text-slate-400">{f.name}</div>
+        </div>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-slate-300 text-sm p-4">
+          <span className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10">{f.name}</span>
+        </div>
+      )}
+      <button
+        onClick={() => onRemove(idx)}
+        title="Remove this upload"
+        aria-label="Remove uploaded media"
+        className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/70 hover:bg-rose-500/80 backdrop-blur border border-white/20 text-white flex items-center justify-center transition"
+      >×</button>
+      {files.length > 1 && (
+        <div className="absolute top-2 left-2"><Badge tone="violet">{files.length} files</Badge></div>
+      )}
+      <div className="absolute bottom-2 left-2 right-12 text-xs text-slate-200 bg-black/60 backdrop-blur px-2 py-1 rounded truncate">
+        {f.name}
+      </div>
+    </div>
+  );
+}
+
+// Quiet idle state — no fake media, just instructions.
+function CleanPlaceholder() {
+  return (
+    <div className="text-center p-8 max-w-md">
+      <div className="text-white font-medium">No media uploaded yet</div>
+      <div className="text-sm text-slate-400 mt-1">
+        Upload an image, video, or audio file on the left — or just write a prompt — then click <span className="text-violet-300">Generate Animation</span>.
+      </div>
     </div>
   );
 }
