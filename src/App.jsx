@@ -1783,6 +1783,31 @@ const LOCAL_BACKENDS = [
   { name: "Wan Video",              desc: "Open video model. Heavier VRAM requirements.",             link: "#" },
   { name: "FFmpeg",                 desc: "Required for encoding GIF/MP4 outputs locally.",           link: "https://ffmpeg.org" },
 ];
+// One step in the Local AI Setup quick-start checklist.
+function ChecklistStep({ number, title, subtitle, children }) {
+  return (
+    <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-cyan-500 text-white font-bold flex items-center justify-center shrink-0 shadow-lg shadow-violet-900/40">{number}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="font-semibold text-white">{title}</h4>
+            {subtitle && <Badge tone="slate">{subtitle}</Badge>}
+          </div>
+          <div className="mt-2 text-sm text-slate-300 space-y-2">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Monospace code block used inside the checklist + desktop shortcut sections.
+function CodeBlock({ children }) {
+  return (
+    <pre className="text-xs font-mono bg-black/40 border border-white/10 rounded-lg p-3 overflow-x-auto text-slate-200 whitespace-pre-wrap break-words">{children}</pre>
+  );
+}
+
 function ConnectionBadge({ status }) {
   if (status === "connected")    return <Badge tone="emerald">● Connected</Badge>;
   if (status === "disconnected") return <Badge tone="rose">● Not Connected</Badge>;
@@ -1844,8 +1869,8 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
 
       {/* Hosted-deployment note */}
       <div className="mb-6 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-        <div className="font-semibold text-amber-200 mb-1">⚠ How local AI works on the hosted site</div>
-        Local AI generation only works when the user runs the local backend on their own computer. The online website can connect to <span className="font-mono text-amber-200">localhost</span> only from the same user&apos;s device — there is no shared GPU server. Each visitor brings their own ComfyUI install.
+        <div className="font-semibold text-amber-200 mb-1">⚠ Animiko is LOCAL-ONLY for AI generation</div>
+        Hosted/Vercel versions cannot connect to <span className="font-mono text-amber-200">http://127.0.0.1</span> or <span className="font-mono text-amber-200">http://localhost</span> because Chrome blocks HTTPS websites from calling local private network addresses (Private Network Access / CORS restrictions). To use Local AI, run Animiko locally with <code className="bg-black/30 px-1 py-0.5 rounded">npm run dev</code> — see the checklist below.
       </div>
 
       {/* ============ Hosted-site warning ============ */}
@@ -1866,6 +1891,85 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
           </div>
         </div>
       )}
+
+      {/* ============ Quick Start Checklist (local test, start to finish) ============ */}
+      <Card className="mb-8">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h3 className="font-semibold text-white">Quick Start Checklist · Local Test, Start to Finish</h3>
+          <Badge tone="cyan">Run locally</Badge>
+        </div>
+
+        <div className="space-y-3">
+          <ChecklistStep number="1" title="Start ComfyUI first" subtitle="Terminal A">
+            <p>For ComfyUI Portable:</p>
+            <CodeBlock>{`cd C:\\ComfyUI_windows_portable
+.\\python_embeded\\python.exe -s ComfyUI\\main.py --enable-cors-header "*"`}</CodeBlock>
+            <p>Wait for this line in the terminal:</p>
+            <CodeBlock>{`To see the GUI go to: http://127.0.0.1:8188`}</CodeBlock>
+            <p className="text-xs text-amber-200/90">
+              ⚠ Leave this terminal open the whole time — it's your live ComfyUI server log.
+            </p>
+          </ChecklistStep>
+
+          <ChecklistStep number="2" title="Start Animiko locally" subtitle="Terminal B">
+            <p>If you haven't cloned the repo yet:</p>
+            <CodeBlock>{`cd C:\\Users\\ongcz\\Desktop\\Jc\\Claude
+git clone https://github.com/JPODesign/local-ai-animation-studio.git animiko-local
+cd animiko-local
+npm install
+npm run dev`}</CodeBlock>
+            <p>If already cloned:</p>
+            <CodeBlock>{`cd C:\\Users\\ongcz\\Desktop\\Jc\\Claude\\animiko-local
+git pull
+npm run dev`}</CodeBlock>
+            <p>Wait for:</p>
+            <CodeBlock>{`Local:   http://localhost:5173/`}</CodeBlock>
+            <p>Open <code className="bg-black/30 px-1 py-0.5 rounded font-mono">http://localhost:5173</code> in your browser. You're using the local dev server — Animiko's hosted Vercel URL will <em>not</em> work for this.</p>
+          </ChecklistStep>
+
+          <ChecklistStep number="3" title="Test connection" subtitle="Inside Animiko">
+            <ul className="list-disc pl-5 space-y-1">
+              <li>Backend URL should be <code className="bg-black/30 px-1 py-0.5 rounded font-mono">http://127.0.0.1:8188</code></li>
+              <li>Click <span className="text-violet-300 font-medium">Test Connection</span></li>
+              <li>If connected, the badge turns emerald and shows <em>"ComfyUI connected"</em></li>
+            </ul>
+            <details className="rounded-lg bg-rose-500/5 border border-rose-400/20 p-2 mt-2">
+              <summary className="text-xs text-rose-200 cursor-pointer font-medium">If Test Connection fails…</summary>
+              <ul className="list-decimal pl-5 mt-2 text-xs text-slate-300 space-y-1">
+                <li>Make sure ComfyUI is running (check Terminal A)</li>
+                <li>Make sure the URL matches Terminal A's output (e.g. <code className="bg-black/30 px-1 rounded">http://127.0.0.1:8188</code>)</li>
+                <li>Make sure ComfyUI was launched with <code className="bg-black/30 px-1 rounded">--enable-cors-header "*"</code></li>
+                <li>Make sure Animiko is running locally (<code className="bg-black/30 px-1 rounded">http://localhost:5173</code>), <em>not</em> from Vercel</li>
+              </ul>
+            </details>
+          </ChecklistStep>
+
+          <ChecklistStep number="4" title="Load or create a workflow">
+            <p>
+              Click <span className="text-violet-300 font-medium">✨ Create Test Workflow</span> for the built-in SD 1.5 text-to-image template,
+              <strong> OR</strong> upload your own ComfyUI workflow JSON.
+            </p>
+            <p className="text-xs text-slate-400">
+              For your own workflow: in ComfyUI, open <strong>Settings → Enable Dev mode Options</strong>, then click <strong>Save (API Format)</strong> (not the plain "Save"). Upload that JSON in the Connection card below.
+            </p>
+          </ChecklistStep>
+
+          <ChecklistStep number="5" title="Generate animation">
+            <ul className="list-disc pl-5 space-y-1">
+              <li>Change <strong>AI Model</strong> from <em>Demo Mode</em> to <strong>Local ComfyUI Workflow</strong></li>
+              <li>Type your prompt in the prompt textarea</li>
+              <li>Click <span className="text-violet-300 font-medium">⚡ Generate Animation</span></li>
+              <li>
+                Success indicator: <strong>Terminal A</strong> (the ComfyUI window) prints{" "}
+                <code className="bg-black/30 px-1 py-0.5 rounded font-mono">got prompt</code>
+              </li>
+            </ul>
+            <p className="text-xs text-slate-400">
+              The Animation Results panel will show "Sending prompt to ComfyUI…", then ComfyUI's prompt_id, then the rendered output (or a Queued state with a "Check Output Now" button if generation takes longer than 30 s).
+            </p>
+          </ChecklistStep>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* ============ Connection panel (inline, not a modal) ============ */}
@@ -1976,6 +2080,34 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
           </div>
         </Card>
       </div>
+
+      {/* ============ Desktop Shortcut card ============ */}
+      <Card className="mb-8">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="font-semibold text-white">Open Animiko Easily · Desktop Shortcut</h3>
+          <Badge tone="violet">Optional</Badge>
+        </div>
+        <p className="text-sm text-slate-300 mb-3">
+          Create a desktop shortcut so you don't have to retype the launch commands every time.
+        </p>
+        <ol className="list-decimal pl-5 text-sm text-slate-300 space-y-1.5 mb-3">
+          <li>Create a file on your <strong>Desktop</strong> named <code className="bg-black/30 px-1 py-0.5 rounded font-mono">Open Animiko.bat</code></li>
+          <li>Paste the code below inside it</li>
+          <li>Save the file</li>
+          <li>Double-click it whenever you want to open Animiko</li>
+        </ol>
+        <CodeBlock>{`cd /d "C:\\Users\\ongcz\\Desktop\\Jc\\Claude\\animiko-local"
+npm run dev`}</CodeBlock>
+        <p className="text-xs text-slate-400 mt-2">
+          The .bat opens a terminal and starts the Animiko dev server. Open <code className="bg-black/30 px-1 py-0.5 rounded font-mono">http://localhost:5173</code> in your browser afterwards. Remember: ComfyUI must already be running in a separate terminal (Step 1 above).
+        </p>
+        <p className="text-xs text-slate-400 mt-2">
+          Want to launch ComfyUI from a shortcut too? Make another .bat with:
+        </p>
+        <CodeBlock>{`cd /d "C:\\ComfyUI_windows_portable"
+.\\python_embeded\\python.exe -s ComfyUI\\main.py --enable-cors-header "*"
+pause`}</CodeBlock>
+      </Card>
 
       {/* ============ Supported backends reference ============ */}
       <h3 className="text-lg font-semibold text-white mb-3">Supported backends</h3>
