@@ -374,30 +374,115 @@ function ComfyResult({ result }) {
 const PART_TYPES = ["head", "eyes", "eyebrows", "nose", "ears", "mouth", "body", "arms", "legs", "feet"];
 const PRESETS = ["run", "walk", "wave", "eat", "angry stomp", "flex muscles", "jump", "dance", "point"];
 
-// Stroke width for every built-in shape. Single source of truth so the
-// bounds helper can account for the extra pixels the stroke paints
-// outside the geometric edge.
+// Stroke width for every built-in shape — single source of truth.
 const PART_STROKE = 4;
 
-// Reusable bounds helper.
-// Convention: every part stores its TRUE CENTER as (p.x, p.y). The caller
-// translates to that point and rotates around it, so this returns the box
-// in part-local coordinates centered on (0, 0). Includes:
-//   - the part's own w × h
-//   - stroke width (so a stroked line isn't clipped by the box)
-//   - a small visual padding so the box doesn't hug the geometry too tightly
-// Same function powers: selection rectangle, hit-testing, library thumbnails.
-function getPartBounds(p, padding = 6) {
-  const stroke = p.src ? 0 : PART_STROKE; // uploaded images have no stroke
-  const w = p.w + stroke + padding * 2;
-  const h = p.h + stroke + padding * 2;
-  return { x: -w / 2, y: -h / 2, w, h };
+// --------------------------------------------------------------------------
+// PER-SHAPE ANALYTIC BOUNDS  (part-local coords, centered around the origin)
+// --------------------------------------------------------------------------
+// Each case returns the SMALLEST axis-aligned rectangle that wraps the
+// pixels drawBuiltinPart actually paints — derived from the same hw/hh and
+// geometry the drawing code uses, with stroke pixels included. This is the
+// "true rendered bounding rectangle" the editor uses for the selection box,
+// hit-testing, and any future snapping.
+function getShapeLocalBounds(type, w, h) {
+  const hw = Math.max(1, (w - PART_STROKE) / 2); // inner half-width
+  const hh = Math.max(1, (h - PART_STROKE) / 2); // inner half-height
+  const s2 = PART_STROKE / 2;                     // half-stroke padding
+
+  // Build a rect that spans ±dx, ±dy and optionally pads by half a stroke.
+  const sym = (dx, dy, stroked = true) => {
+    const pad = stroked ? s2 : 0;
+    const swp = stroked ? PART_STROKE : 0;
+    return { x: -dx - pad, y: -dy - pad, w: 2 * dx + swp, h: 2 * dy + swp };
+  };
+
+  switch (type) {
+    case "head":     // stroked ellipse — radius hw × hh
+      return sym(hw, hh);
+
+    case "eyes": {   // two FILLED circles at (±hw*0.45, 0), radius r
+      const r = Math.min(hw, hh) * 0.45;
+      return sym(hw * 0.45 + r, r, /*stroked=*/ false);
+    }
+
+    case "eyebrows": // two stroked lines spanning ±hw and ±hh*0.5
+      return sym(hw, hh * 0.5);
+
+    case "nose":     // stroked triangle reaching ±hw, ±hh
+      return sym(hw, hh);
+
+    case "ears":     // two stroked ellipses placed at the edges (extent ±hw, ±hh)
+      return sym(hw, hh);
+
+    case "mouth": {  // stroked arc — solve analytically
+      const ry = Math.max(hh, 4);
+      // Arc from 0.15π → 0.85π around centre (0, -hh*0.2).
+      // y_min at endpoints (sin 0.15π), y_max at peak (sin 0.5π = 1).
+      const yMin = -hh * 0.2 + ry * Math.sin(0.15 * Math.PI);
+      const yMax = -hh * 0.2 + ry;
+      const yMid = (yMin + yMax) / 2;
+      const yExt = (yMax - yMin) / 2;
+      // x extent: max |cos(angle)| over arc = cos(0.15π).
+      const xExt = hw * Math.cos(0.15 * Math.PI);
+      return {
+        x: -xExt - s2,
+        y: yMid - yExt - s2,
+        w: 2 * xExt + PART_STROKE,
+        h: 2 * yExt + PART_STROKE,
+      };
+    }
+
+    case "body":     // vertical line — stroke thickness is the x extent
+      return { x: -s2, y: -hh - s2, w: PART_STROKE, h: 2 * hh + PART_STROKE };
+
+    case "arms":     // horizontal line — stroke thickness is the y extent
+      return { x: -hw - s2, y: -s2, w: 2 * hw + PART_STROKE, h: PART_STROKE };
+
+    case "legs":     // two diagonals from (0,-hh) to (±hw, hh) — full ±hw, ±hh
+      return sym(hw, hh);
+
+    case "feet":     // two ellipses; combined paint reaches ±hw, ±hh
+      return sym(hw, hh);
+
+    default:
+      return sym(hw, hh);
+  }
 }
 
-// Hit-test rectangle (no padding — we want clicks to land on the real shape).
-function getPartHitBox(p) {
-  const stroke = p.src ? 0 : PART_STROKE;
-  return { w: p.w + stroke, h: p.h + stroke };
+// Selection rectangle = true painted bounds expanded by visual padding.
+// Uploaded images: painted region is exactly the image's w × h (no stroke).
+function getPartBounds(p, padding = 6) {
+  const local = p.src
+    ? { x: -p.w / 2, y: -p.h / 2, w: p.w, h: p.h }
+    : getShapeLocalBounds(p.type, p.w, p.h);
+  return {
+    x: local.x - padding,
+    y: local.y - padding,
+    w: local.w + padding * 2,
+    h: local.h + padding * 2,
+  };
+}
+
+// Hit-test rect = painted region with NO padding (clicks land on the shape).
+function getPartHitRect(p) {
+  return p.src
+    ? { x: -p.w / 2, y: -p.h / 2, w: p.w, h: p.h }
+    : getShapeLocalBounds(p.type, p.w, p.h);
+}
+
+// World-space hit-test for a (possibly rotated) part. Reverses the part's
+// translate + rotation, then checks the analytic local rect — so the click
+// is tested against the TRUE TRANSFORMED bounds of the rendered shape.
+function hitTestPart(p, worldX, worldY) {
+  const dx = worldX - p.x;
+  const dy = worldY - p.y;
+  const a  = -((p.rot || 0) * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const lx = dx * cos - dy * sin;
+  const ly = dx * sin + dy * cos;
+  const b  = getPartHitRect(p);
+  return lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h;
 }
 
 // Draw a built-in stickman part CENTERED at the local origin (0, 0).
@@ -643,10 +728,7 @@ function StickmanBuilder() {
     const rect = canvasRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (W / rect.width);
     const y = (e.clientY - rect.top) * (H / rect.height);
-    const hit = [...frame.parts].reverse().find(p => {
-      const hb = getPartHitBox(p);
-      return Math.abs(x - p.x) < hb.w / 2 && Math.abs(y - p.y) < hb.h / 2;
-    });
+    const hit = [...frame.parts].reverse().find(p => hitTestPart(p, x, y));
     if (hit) { setSelected(hit.id); setDrag({ id: hit.id, dx: hit.x - x, dy: hit.y - y }); }
     else setSelected(null);
   };
