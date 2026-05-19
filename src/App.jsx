@@ -129,7 +129,7 @@ const MODELS = [
 ];
 const STYLES = ["Cinematic", "Anime", "3D Cartoon", "Pixel Art", "Realistic", "Stickman Sketch", "Cyberpunk"];
 
-function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult }) {
+function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, result, setResult }) {
   const [tab, setTab] = useState(TABS[0]);
   // No hardcoded sample prompt — the user types their own.
   const [prompt, setPrompt] = useState("");
@@ -324,11 +324,16 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
         <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <h3 className="font-semibold text-white">Animation Results</h3>
           <div className="flex items-center gap-2 flex-wrap">
-            {model !== "demo" && (
-              <Badge tone={settings.workflow ? "emerald" : "rose"}>
-                Local AI · {settings.workflow ? "ready" : "not connected"}
-              </Badge>
-            )}
+            {model !== "demo" && (() => {
+              const ready = settings.workflow && connection && connection.status === "connected";
+              const tone  = ready ? "emerald" : (connection && connection.status === "disconnected" ? "rose" : "amber");
+              const label = ready
+                ? "ready"
+                : !settings.workflow
+                  ? "no workflow"
+                  : connection && connection.status === "disconnected" ? "not connected" : "untested";
+              return <Badge tone={tone}>Local AI · {label}</Badge>;
+            })()}
             <Badge tone="cyan">{model === "demo" ? "Demo Mode" : "Preview"}</Badge>
           </div>
         </div>
@@ -371,6 +376,7 @@ function CreationPanel({ settings, onOpenSettings, onScrollTo, result, setResult
                 prompt={prompt}
                 model={model}
                 settings={settings}
+                connection={connection}
               />
             )}
           </div>
@@ -470,8 +476,19 @@ function MediaPreview({ uploaded, onRemove, prompt, badge }) {
 // In Local AI mode: shows backend URL + workflow status + prompt (no demo).
 // In Demo Mode: generic copy + prompt (no city placeholder either, the
 //               demo city only renders after Generate is clicked).
-function CleanPlaceholder({ hasPrompt, prompt, model, settings }) {
+function CleanPlaceholder({ hasPrompt, prompt, model, settings, connection }) {
   const isLocalAI = model && model !== "demo";
+  const status = (connection && connection.status) || "untested";
+  const statusClass =
+    status === "connected"    ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200" :
+    status === "disconnected" ? "bg-rose-500/15 border-rose-400/40 text-rose-200" :
+    status === "testing"      ? "bg-cyan-500/15 border-cyan-400/40 text-cyan-200" :
+                                "bg-white/5 border-white/10 text-slate-300";
+  const statusLabel =
+    status === "connected"    ? "● Connected" :
+    status === "disconnected" ? "● Not Connected" :
+    status === "testing"      ? "● Testing…" :
+                                "● Not Tested";
 
   return (
     <div className="text-center p-8 max-w-md">
@@ -493,6 +510,7 @@ function CleanPlaceholder({ hasPrompt, prompt, model, settings }) {
                 ? "Workflow: " + (settings.workflowName || "loaded")
                 : "Workflow: not loaded"}
             </span>
+            <span className={"px-2 py-0.5 rounded-full border " + statusClass}>{statusLabel}</span>
           </div>
         </>
       ) : (
@@ -1613,13 +1631,52 @@ const LOCAL_BACKENDS = [
   { name: "Wan Video",              desc: "Open video model. Heavier VRAM requirements.",             link: "#" },
   { name: "FFmpeg",                 desc: "Required for encoding GIF/MP4 outputs locally.",           link: "https://ffmpeg.org" },
 ];
-function LocalAISetup({ onOpenSettings }) {
+function ConnectionBadge({ status }) {
+  if (status === "connected")    return <Badge tone="emerald">● Connected</Badge>;
+  if (status === "disconnected") return <Badge tone="rose">● Not Connected</Badge>;
+  if (status === "testing")      return <Badge tone="cyan">● Testing…</Badge>;
+  return <Badge tone="slate">● Not Tested</Badge>;
+}
+
+function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, runTest }) {
+  // Workflow upload — same logic as the Settings modal, exposed inline.
+  const onWorkflow = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const json = JSON.parse(reader.result);
+        if (!isApiFormat(json)) {
+          alert('"' + f.name + '" looks like the ComfyUI UI workflow format, not the API format.\n\nIn ComfyUI: enable Dev mode in Settings, then click "Save (API Format)".');
+          return;
+        }
+        updateSettings({ workflow: json, workflowName: f.name });
+      } catch (err) {
+        alert("Could not parse workflow JSON: " + err.message);
+      }
+    };
+    reader.readAsText(f);
+    e.target.value = "";
+  };
+  const clearWorkflow = () => updateSettings({ workflow: null, workflowName: "" });
+
+  const status = (connection && connection.status) || "untested";
+  const statusBoxClass =
+    status === "connected"    ? "bg-emerald-500/10 border-emerald-400/30 text-emerald-200" :
+    status === "disconnected" ? "bg-rose-500/10 border-rose-400/30 text-rose-200" :
+    status === "testing"      ? "bg-cyan-500/10 border-cyan-400/30 text-cyan-200" :
+                                "bg-white/5 border-white/10 text-slate-300";
+
   return (
     <section id="local-ai" className="max-w-7xl mx-auto px-4 md:px-6 py-10">
       <div className="mb-6">
         <div className="text-xs uppercase tracking-widest text-cyan-300 mb-2 font-medium">Backend</div>
         <h2 className="text-2xl md:text-3xl font-bold text-white">Local AI Setup</h2>
-        <p className="text-slate-300 mt-2 max-w-3xl">The frontend is ready. The local backend is not. When you install one of these tools, connect it from Settings → Local AI.</p>
+        <p className="text-slate-300 mt-2 max-w-3xl">
+          Connect a local ComfyUI server (running on your own machine) to use real AI generation.
+          Nothing leaves your computer — the hosted dashboard talks to <span className="font-mono text-cyan-300">localhost</span> directly from your browser.
+        </p>
       </div>
 
       {/* Hosted-deployment note */}
@@ -1628,6 +1685,105 @@ function LocalAISetup({ onOpenSettings }) {
         Local AI generation only works when the user runs the local backend on their own computer. The online website can connect to <span className="font-mono text-amber-200">localhost</span> only from the same user&apos;s device — there is no shared GPU server. Each visitor brings their own ComfyUI install.
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        {/* ============ Connection panel (inline, not a modal) ============ */}
+        <Card className="lg:col-span-2">
+          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+            <h3 className="font-semibold text-white">Connection</h3>
+            <ConnectionBadge status={status} />
+          </div>
+
+          <label className="block mb-3">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Backend URL</div>
+            <input
+              type="url"
+              value={settings.backendUrl}
+              onChange={e => updateSettings({ backendUrl: e.target.value })}
+              placeholder="http://localhost:8188"
+              className={inputCls + " font-mono text-sm"}
+            />
+            <div className="text-xs text-slate-400 mt-1">
+              Default: <span className="font-mono text-slate-300">http://localhost:8188</span> · this is ComfyUI's default port
+            </div>
+          </label>
+
+          <div className="mb-3">
+            <div className="text-xs text-cyan-300 mb-1 font-medium">Workflow JSON (API Format)</div>
+            <label className="block cursor-pointer">
+              <div className="rounded-lg border border-dashed border-white/15 hover:border-violet-400/50 hover:bg-white/5 p-3 text-center text-slate-300 transition text-sm">
+                {settings.workflow ? (
+                  <>
+                    <span className="text-emerald-300">✓</span>{" "}
+                    Loaded: <span className="text-emerald-300 font-medium">{settings.workflowName || "workflow"}</span> · {Object.keys(settings.workflow).length} nodes
+                  </>
+                ) : (
+                  <><span className="text-violet-300">⬆</span> Click to upload ComfyUI workflow JSON</>
+                )}
+              </div>
+              <input type="file" accept="application/json" className="hidden" onChange={onWorkflow}/>
+            </label>
+            {settings.workflow && (
+              <button onClick={clearWorkflow} className="mt-1 text-[11px] text-rose-300 hover:text-rose-200 underline">Remove workflow</button>
+            )}
+            <div className="text-xs text-slate-400 mt-1">
+              In ComfyUI: enable <span className="text-slate-300">Dev mode</span>, then use <span className="text-slate-300">"Save (API Format)"</span> to export.
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 mt-4 flex-wrap">
+            <PrimaryBtn onClick={runTest} disabled={status === "testing"} className="text-sm">
+              {status === "testing" && <span className="w-3 h-3 border-2 border-white/70 border-t-transparent rounded-full animate-spin"/>}
+              {status === "testing" ? "Testing…" : "Test Connection"}
+            </PrimaryBtn>
+            {status !== "untested" && status !== "testing" && (
+              <button onClick={() => runTest()} className="text-xs text-slate-400 hover:text-slate-200 underline">Re-test</button>
+            )}
+          </div>
+
+          {connection && connection.message && (
+            <div className={"mt-3 text-xs rounded-lg p-2 whitespace-pre-wrap border " + statusBoxClass}>
+              {connection.message}
+            </div>
+          )}
+
+          <p className="text-xs text-slate-400 mt-3">
+            Launch ComfyUI with <code className="text-violet-300">--enable-cors-header "*"</code> so this hosted page can call it.
+          </p>
+        </Card>
+
+        {/* ============ How to Install ComfyUI ============ */}
+        <Card>
+          <h3 className="font-semibold text-white mb-3">Install ComfyUI</h3>
+          <ol className="space-y-2.5 text-sm text-slate-200 list-decimal pl-5">
+            <li>
+              Download{" "}
+              <a href="https://github.com/comfyanonymous/ComfyUI/releases" target="_blank" rel="noreferrer" className="text-cyan-300 hover:text-cyan-200 underline">
+                ComfyUI Portable
+              </a>
+            </li>
+            <li>Extract the zip to a folder (e.g. <code className="text-xs bg-black/30 px-1 py-0.5 rounded">C:\ComfyUI</code>)</li>
+            <li>
+              Run <code className="text-xs bg-black/30 px-1 py-0.5 rounded">run_nvidia_gpu.bat</code>
+              <div className="text-xs text-slate-400 mt-0.5">
+                (or <code className="bg-black/30 px-1 py-0.5 rounded">run_cpu.bat</code> if no NVIDIA GPU)
+              </div>
+            </li>
+            <li>
+              Open <code className="text-xs bg-black/30 px-1 py-0.5 rounded">http://localhost:8188</code> to verify it works
+            </li>
+            <li>
+              Paste that URL into the field on the left → click <span className="text-violet-300">Test Connection</span>
+            </li>
+          </ol>
+          <div className="mt-3 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-lg p-2">
+            <strong>For the hosted site:</strong> close ComfyUI, then re-launch it with the CORS flag:
+            <code className="block mt-1 text-amber-100 text-[11px] bg-black/30 px-2 py-1 rounded font-mono">python main.py --enable-cors-header "*"</code>
+          </div>
+        </Card>
+      </div>
+
+      {/* ============ Supported backends reference ============ */}
+      <h3 className="text-lg font-semibold text-white mb-3">Supported backends</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {LOCAL_BACKENDS.map(b => (
           <Card key={b.name} className="hover:border-violet-400/40 hover:shadow-violet-500/20 transition">
@@ -1639,7 +1795,7 @@ function LocalAISetup({ onOpenSettings }) {
                   <div className="text-xs text-slate-400">{b.desc}</div>
                 </div>
               </div>
-              <Badge tone="rose">● Not connected</Badge>
+              {b.name === "ComfyUI" ? <ConnectionBadge status={status}/> : <Badge tone="rose">● Not connected</Badge>}
             </div>
             <div className="mt-3 text-xs text-slate-300 space-y-1">
               <div>• Requirement: <span className="text-slate-400">Local install</span></div>
@@ -1647,7 +1803,6 @@ function LocalAISetup({ onOpenSettings }) {
               <div>• Depends entirely on your computer hardware</div>
             </div>
             <div className="mt-3 flex items-center gap-2">
-              <PrimaryBtn className="px-3 py-1.5 text-xs" onClick={onOpenSettings}>Configure Later</PrimaryBtn>
               <a href={b.link} target="_blank" rel="noreferrer" className="text-xs px-3 py-1.5 rounded-lg bg-white/10 border border-white/10 hover:bg-white/15 text-slate-200">Docs</a>
             </div>
           </Card>
@@ -1784,6 +1939,19 @@ export default function App() {
     return next;
   });
 
+  // Live ComfyUI connection state. "untested" before the user clicks Test;
+  // we don't auto-ping on load so we never make a network request the user
+  // didn't ask for. Surfaced in the result-card header, the inline Local
+  // AI Setup panel, and the idle CleanPlaceholder.
+  const [connection, setConnection] = useState({ status: "untested", message: "" });
+  const runConnectionTest = async () => {
+    setConnection({ status: "testing", message: "Pinging " + settings.backendUrl + "…" });
+    const r = await comfyTest(settings.backendUrl);
+    setConnection(r.ok
+      ? { status: "connected",    message: "Connected ✓ — ComfyUI reachable at " + settings.backendUrl }
+      : { status: "disconnected", message: r.error });
+  };
+
   const scrollTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
 
   return (
@@ -1798,10 +1966,16 @@ export default function App() {
         <Navbar theme={theme} setTheme={setTheme} onOpenSettings={() => setOpenSettings(true)} />
         <Hero />
         <section id="studio" className="max-w-7xl mx-auto px-4 md:px-6 pb-4">
-          <CreationPanel settings={settings} onOpenSettings={() => setOpenSettings(true)} onScrollTo={scrollTo} result={result} setResult={setResult} />
+          <CreationPanel settings={settings} connection={connection} onOpenSettings={() => setOpenSettings(true)} onScrollTo={scrollTo} result={result} setResult={setResult} />
         </section>
         <StickmanBuilder />
-        <LocalAISetup onOpenSettings={() => setOpenSettings(true)} />
+        <LocalAISetup
+          onOpenSettings={() => setOpenSettings(true)}
+          settings={settings}
+          updateSettings={updateSettings}
+          connection={connection}
+          runTest={runConnectionTest}
+        />
         <footer className="border-t border-white/10 mt-6">
           <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
             <div>© Animiko · Frontend-only build · No data leaves your browser.</div>
