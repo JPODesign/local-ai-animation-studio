@@ -12,11 +12,10 @@ REM      only if node_modules is missing, npm run dev).
 REM   4. Opens http://localhost:5173 in the default browser after 10 s.
 REM =====================================================================
 
-REM --- MANUAL OVERRIDE (optional) ---
-REM If auto-detect fails, paste your ComfyUI Portable folder path between
-REM the quotes below, e.g.:
-REM     set "COMFY_DIR=D:\AI\ComfyUI_windows_portable"
-set "COMFY_DIR="
+REM --- MANUAL OVERRIDE (set to your real ComfyUI Portable folder) ---
+REM This wins over auto-detect. If you move ComfyUI, edit this line OR
+REM clear it (set "COMFY_DIR=") to let auto-detect find it again.
+set "COMFY_DIR=C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
 
 REM --- Animiko project path (edit if your clone is elsewhere) ---
 set "ANIMIKO_DIR=C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
