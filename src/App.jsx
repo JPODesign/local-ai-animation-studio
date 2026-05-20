@@ -248,6 +248,68 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
   // --- Enhanced prompt (built by the Enhance button OR pasted manually) ---
   const [enhancedPrompt, setEnhancedPrompt] = useState("");
 
+  // --- Characters (persisted to localStorage; selected ones get folded
+  //     into the enhanced prompt and the result metadata) ---
+  const [characters, setCharacters] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("laias.characters") || "[]"); } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("laias.characters", JSON.stringify(characters)); } catch (_) {}
+  }, [characters]);
+
+  const [selectedCharIds, setSelectedCharIds] = useState([]);
+  const [showCharModal,   setShowCharModal]   = useState(false);
+
+  // Character form state (cleared each time the modal opens)
+  const [newCharName,  setNewCharName]  = useState("");
+  const [newCharDesc,  setNewCharDesc]  = useState("");
+  const [newCharStyle, setNewCharStyle] = useState("");
+  const [newCharNotes, setNewCharNotes] = useState("");
+  const [newCharImage, setNewCharImage] = useState(null);
+
+  const openCharModal = () => {
+    setNewCharName("");
+    setNewCharDesc("");
+    setNewCharStyle("");
+    setNewCharNotes("");
+    setNewCharImage(null);
+    setShowCharModal(true);
+  };
+  const saveCharacter = () => {
+    if (!newCharName.trim()) {
+      alert("Please give the character a name.");
+      return;
+    }
+    const c = {
+      id: (crypto.randomUUID && crypto.randomUUID()) || ("char-" + Date.now()),
+      name: newCharName.trim(),
+      description: newCharDesc.trim(),
+      visualStyle: newCharStyle.trim(),
+      notes: newCharNotes.trim(),
+      referenceImage: newCharImage,                 // data URL or null
+      createdAt: new Date().toISOString(),
+    };
+    setCharacters(prev => [...prev, c]);
+    setSelectedCharIds(prev => [...prev, c.id]);   // auto-select the new one
+    setShowCharModal(false);
+  };
+  const removeCharacter = (id) => {
+    if (!confirm("Remove this character? This cannot be undone.")) return;
+    setCharacters(prev => prev.filter(c => c.id !== id));
+    setSelectedCharIds(prev => prev.filter(x => x !== id));
+  };
+  const toggleSelectedCharacter = (id) => {
+    setSelectedCharIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+  const onCharImagePick = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => setNewCharImage(r.result);
+    r.readAsDataURL(f);
+    e.target.value = "";
+  };
+
   // Compose a single enhanced prompt string from every active field.
   // Higher-emphasis fragments use ComfyUI's (text:weight) weighting syntax.
   const buildEnhancedPrompt = () => {
@@ -261,6 +323,17 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
     if (mustInclude.trim())    parts.push("(must include: " + mustInclude.trim() + ":1.3)");
     if (trendMode && trendNotes.trim()) {
       parts.push("(" + trendSource + " trending: " + trendNotes.trim() + ":1.2)");
+    }
+    // Selected characters get extra prompt weight so the model focuses on them.
+    const selChars = characters.filter(c => selectedCharIds.includes(c.id));
+    if (selChars.length) {
+      const charStr = selChars.map(c => {
+        const bits = [c.name];
+        if (c.description) bits.push("(" + c.description + ")");
+        if (c.visualStyle) bits.push("in " + c.visualStyle + " style");
+        return bits.join(" ");
+      }).join(", ");
+      parts.push("(featuring " + charStr + ":1.35)");
     }
     if (style)                 parts.push(style.toLowerCase() + ", highly detailed, masterpiece");
     return parts.join(", ");
@@ -793,7 +866,46 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
           </div>
         </details>
 
-        <SecondaryBtn className="mt-3 w-full">+ Add Character</SecondaryBtn>
+        {/* ===== Character cards strip + Add Character button ===== */}
+        <div className="mt-3 space-y-2">
+          {characters.length > 0 && (
+            <div>
+              <div className="text-xs text-cyan-300 font-medium mb-1">
+                Characters <span className="text-slate-400 font-normal">— click to toggle which ones appear in the prompt</span>
+              </div>
+              <div className="flex gap-2 overflow-x-auto scroll-thin pb-1">
+                {characters.map(c => {
+                  const selected = selectedCharIds.includes(c.id);
+                  return (
+                    <div
+                      key={c.id}
+                      className={"shrink-0 relative group rounded-lg border transition cursor-pointer " +
+                        (selected ? "bg-violet-500/20 border-violet-400/60" : "bg-white/5 border-white/10 hover:bg-white/10")}
+                      onClick={() => toggleSelectedCharacter(c.id)}
+                      title={c.description || c.name}
+                    >
+                      <div className="flex items-center gap-2 p-2 pr-3 max-w-[200px]">
+                        {c.referenceImage
+                          ? <img src={c.referenceImage} alt={c.name} className="w-9 h-9 rounded-md object-cover shrink-0" />
+                          : <div className="w-9 h-9 rounded-md bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-sm font-bold text-white shrink-0">{c.name[0].toUpperCase()}</div>}
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-white truncate">{c.name}</div>
+                          {c.visualStyle && <div className="text-[10px] text-slate-400 truncate">{c.visualStyle}</div>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeCharacter(c.id); }}
+                        className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-rose-500/80 hover:bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                        title={"Delete " + c.name}
+                      >×</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <SecondaryBtn className="w-full" onClick={openCharModal}>+ Add Character</SecondaryBtn>
+        </div>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
@@ -924,6 +1036,113 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
           ))}
         </div>
       </Card>
+
+      {/* ===== Add Character modal ===== */}
+      {showCharModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowCharModal(false)}
+        >
+          <div
+            className="bg-slate-900/90 backdrop-blur-xl border border-white/20 shadow-[0_0_40px_rgba(139,92,246,0.25)] rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-auto scroll-thin"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-white">Add Character</h3>
+              <button
+                onClick={() => setShowCharModal(false)}
+                className="text-slate-400 hover:text-white text-lg w-7 h-7 rounded-full hover:bg-white/10"
+                title="Close"
+              >×</button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Name <span className="text-rose-300 font-normal">*required</span>
+                </div>
+                <input
+                  value={newCharName}
+                  onChange={e => setNewCharName(e.target.value)}
+                  className={inputCls}
+                  placeholder="e.g. Luna, Captain Rex, The Witch"
+                  autoFocus
+                />
+              </label>
+
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Description / Personality <span className="text-slate-400 font-normal">— who they are</span>
+                </div>
+                <textarea
+                  value={newCharDesc}
+                  onChange={e => setNewCharDesc(e.target.value)}
+                  rows={3}
+                  className={inputCls + " scroll-thin"}
+                  placeholder="e.g. fluffy orange tabby with green eyes, curious and playful, always wearing a tiny red bow"
+                />
+              </label>
+
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Visual Style <span className="text-slate-400 font-normal">— art / rendering style for this character</span>
+                </div>
+                <input
+                  value={newCharStyle}
+                  onChange={e => setNewCharStyle(e.target.value)}
+                  className={inputCls}
+                  placeholder="e.g. studio ghibli, photorealistic, watercolor anime, low-poly 3D"
+                />
+              </label>
+
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Reference image <span className="text-slate-400 font-normal">— optional, just for your reference</span>
+                </div>
+                {newCharImage ? (
+                  <div className="relative inline-block">
+                    <img src={newCharImage} alt="reference" className="max-h-32 rounded-lg border border-white/10" />
+                    <button
+                      onClick={() => setNewCharImage(null)}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-rose-500/80 text-white text-xs"
+                      title="Remove image"
+                    >×</button>
+                  </div>
+                ) : (
+                  <label className="block cursor-pointer">
+                    <div className="rounded-lg border border-dashed border-white/15 hover:border-violet-400/50 p-3 text-center text-slate-300 text-xs transition">
+                      <span className="text-violet-300">⬆</span> Click to upload a reference image (PNG/JPG/WebP)
+                    </div>
+                    <input type="file" accept="image/*" className="hidden" onChange={onCharImagePick} />
+                  </label>
+                )}
+              </label>
+
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Notes <span className="text-slate-400 font-normal">— anything else worth remembering</span>
+                </div>
+                <textarea
+                  value={newCharNotes}
+                  onChange={e => setNewCharNotes(e.target.value)}
+                  rows={2}
+                  className={inputCls + " scroll-thin"}
+                  placeholder="e.g. backstory, favorite poses, items they usually hold…"
+                />
+              </label>
+
+              <div className="text-[11px] text-slate-400 bg-white/5 border border-white/10 rounded-lg p-2">
+                Characters are stored in your browser (<code className="bg-black/30 px-1 rounded">localStorage</code>). They persist across page refreshes. Selected characters are folded into the enhanced prompt with <code className="bg-black/30 px-1 rounded">(featuring …:1.35)</code> weighting.
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <SecondaryBtn className="flex-1" onClick={() => setShowCharModal(false)}>Cancel</SecondaryBtn>
+                <PrimaryBtn className="flex-1" onClick={saveCharacter}>Save Character</PrimaryBtn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
