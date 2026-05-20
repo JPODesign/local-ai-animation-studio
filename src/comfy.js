@@ -67,23 +67,73 @@ async function uploadImage(url, file) {
   return (await r.json()).name;
 }
 
-function inject(workflow, { prompt, imageFilename }) {
+// Patch the UI's generation parameters into a workflow. Each option is
+// optional — only the keys you pass get written. Nodes are located by
+// class_type (not node id), so this works with both Animiko's built-in
+// test workflow and most third-party SD 1.5 / SDXL graphs.
+//
+// Supported opts:
+//   prompt          → first non-negative CLIPTextEncode.inputs.text
+//   negativePrompt  → first  "negative"-titled CLIPTextEncode.inputs.text
+//   imageFilename   → first LoadImage.inputs.image
+//   checkpoint      → first CheckpointLoaderSimple.inputs.ckpt_name
+//   width           → first EmptyLatentImage.inputs.width
+//   height          → first EmptyLatentImage.inputs.height
+//   steps,cfg,
+//   sampler,
+//   scheduler,
+//   seed            → first KSampler.inputs.{steps,cfg,sampler_name,scheduler,seed}
+function inject(workflow, opts) {
+  opts = opts || {};
   const wf = JSON.parse(JSON.stringify(workflow));
-  let promptInjected = false, imageInjected = false;
+
+  let promptInjected = false, negPromptInjected = false, imageInjected = false;
+  let firstCkpt = null, firstLatent = null, firstKSampler = null;
+
+  // Walk once and remember the first node of each interesting class_type.
   for (const id of Object.keys(wf)) {
     const n = wf[id];
     if (!n || typeof n !== "object") continue;
-    const t = ((n._meta && n._meta.title) || "").toLowerCase();
-    if (!promptInjected && n.class_type === "CLIPTextEncode" && n.inputs && "text" in n.inputs && !t.includes("negative")) {
-      n.inputs.text = prompt;
-      promptInjected = true;
+    const title = ((n._meta && n._meta.title) || "").toLowerCase();
+    const isNeg = title.includes("negative");
+
+    if (n.class_type === "CLIPTextEncode" && n.inputs && "text" in n.inputs) {
+      if (!isNeg && !promptInjected && opts.prompt != null) {
+        n.inputs.text = opts.prompt;
+        promptInjected = true;
+      }
+      if (isNeg && !negPromptInjected && opts.negativePrompt != null) {
+        n.inputs.text = opts.negativePrompt;
+        negPromptInjected = true;
+      }
     }
-    if (!imageInjected && imageFilename && n.class_type === "LoadImage" && n.inputs && "image" in n.inputs) {
-      n.inputs.image = imageFilename;
+    if (!imageInjected && opts.imageFilename && n.class_type === "LoadImage" && n.inputs && "image" in n.inputs) {
+      n.inputs.image = opts.imageFilename;
       imageInjected = true;
     }
+    if (!firstCkpt     && n.class_type === "CheckpointLoaderSimple") firstCkpt     = n;
+    if (!firstLatent   && n.class_type === "EmptyLatentImage")       firstLatent   = n;
+    if (!firstKSampler && n.class_type === "KSampler")               firstKSampler = n;
   }
-  return { workflow: wf, promptInjected, imageInjected };
+
+  if (firstCkpt && opts.checkpoint && firstCkpt.inputs) {
+    firstCkpt.inputs.ckpt_name = opts.checkpoint;
+  }
+  if (firstLatent && firstLatent.inputs) {
+    if (opts.width  != null) firstLatent.inputs.width  = opts.width;
+    if (opts.height != null) firstLatent.inputs.height = opts.height;
+  }
+  if (firstKSampler && firstKSampler.inputs) {
+    if (opts.steps     != null) firstKSampler.inputs.steps        = opts.steps;
+    if (opts.cfg       != null) firstKSampler.inputs.cfg          = opts.cfg;
+    if (opts.sampler   != null) firstKSampler.inputs.sampler_name = opts.sampler;
+    if (opts.scheduler != null) firstKSampler.inputs.scheduler    = opts.scheduler;
+    // seed: any number >= 0 wins. -1 means "let the workflow keep its own seed
+    // OR generate randomly upstream" — we deliberately do not overwrite.
+    if (opts.seed != null && opts.seed >= 0) firstKSampler.inputs.seed = opts.seed;
+  }
+
+  return { workflow: wf, promptInjected, imageInjected, negPromptInjected };
 }
 
 // ============ THE ACTUAL CALL TO COMFYUI ============
@@ -170,7 +220,9 @@ export async function checkResult(backendUrl, promptId) {
   }
 }
 
-export async function generate({ backendUrl, workflow, prompt, imageFile, onProgress }) {
+export async function generate(opts) {
+  opts = opts || {};
+  const { backendUrl, workflow, imageFile, onProgress } = opts;
   if (!backendUrl) throw new Error("No backend URL set. Open Settings → Local AI.");
   if (!workflow) throw new Error("No workflow uploaded. Open Settings → Local AI.");
   if (!isApiFormat(workflow)) throw new Error('Wrong workflow format. In ComfyUI, enable Dev Mode and use "Save (API Format)".');
@@ -185,7 +237,21 @@ export async function generate({ backendUrl, workflow, prompt, imageFile, onProg
     imageFilename = await uploadImage(backendUrl, imageFile);
   }
 
-  const { workflow: patched } = inject(workflow, { prompt, imageFilename });
+  // Forward every supported generation parameter into the workflow.
+  // Anything left undefined is preserved from the original workflow JSON.
+  const { workflow: patched } = inject(workflow, {
+    prompt:         opts.prompt,
+    negativePrompt: opts.negativePrompt,
+    imageFilename,
+    checkpoint:     opts.checkpoint,
+    width:          opts.width,
+    height:         opts.height,
+    steps:          opts.steps,
+    cfg:            opts.cfg,
+    sampler:        opts.sampler,
+    scheduler:      opts.scheduler,
+    seed:           opts.seed,
+  });
 
   onProgress && onProgress({ stage: "queuing workflow" });
   const queued = await queuePrompt(backendUrl, patched);

@@ -183,12 +183,52 @@ const MODELS = [
 ];
 const STYLES = ["Cinematic", "Anime", "3D Cartoon", "Pixel Art", "Realistic", "Stickman Sketch", "Cyberpunk"];
 
-function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, result, setResult }) {
+// Common ComfyUI samplers, labeled for the dropdown.
+// Internal name → friendly label.
+const SAMPLERS = [
+  { v: "euler",           l: "Euler" },
+  { v: "euler_ancestral", l: "Euler a (ancestral)" },
+  { v: "heun",            l: "Heun" },
+  { v: "dpm_2",           l: "DPM 2" },
+  { v: "dpmpp_2m",        l: "DPM++ 2M  (recommended)" },
+  { v: "dpmpp_2m_sde",    l: "DPM++ 2M SDE" },
+  { v: "dpmpp_sde",       l: "DPM++ SDE" },
+  { v: "dpmpp_3m_sde",    l: "DPM++ 3M SDE" },
+  { v: "ddim",            l: "DDIM" },
+  { v: "uni_pc",          l: "UniPC" },
+  { v: "lcm",             l: "LCM (low-step models)" },
+];
+
+const SCHEDULERS = [
+  { v: "karras",       l: "Karras  (recommended for DPM++)" },
+  { v: "normal",       l: "Normal" },
+  { v: "exponential",  l: "Exponential" },
+  { v: "simple",       l: "Simple" },
+  { v: "sgm_uniform",  l: "SGM uniform" },
+  { v: "ddim_uniform", l: "DDIM uniform" },
+];
+
+// Generate a fresh 32-bit unsigned random seed.
+const randomSeed = () => Math.floor(Math.random() * 0xffffffff);
+
+function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onScrollTo, result, setResult }) {
   const [tab, setTab] = useState(TABS[0]);
   // No hardcoded sample prompt — the user types their own.
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("demo");
   const [style, setStyle] = useState("Cinematic");
+  // --- Generation parameters (injected into the ComfyUI workflow at /prompt time) ---
+  const [negativePrompt, setNegativePrompt] = useState("text, watermark, blurry, low quality, distorted, ugly");
+  const [genCheckpoint,  setGenCheckpoint]  = useState("");       // "" = use whatever the workflow has
+  const [width,    setWidth]    = useState(768);
+  const [height,   setHeight]   = useState(768);
+  const [steps,    setSteps]    = useState(30);
+  const [cfg,      setCfg]      = useState(7);
+  const [sampler,  setSampler]  = useState("dpmpp_2m");
+  const [scheduler,setScheduler]= useState("karras");
+  const [seed,     setSeed]     = useState(-1);                    // -1 = random next time
+  const [lastSeed, setLastSeed] = useState(null);                  // last seed actually used
+  const [upscale,  setUpscale]  = useState(false);                 // hires multiplier (×1.5)
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
@@ -263,25 +303,43 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
     // Captured locally so the catch block can read the latest value even
     // though setPendingPromptId is async.
     let receivedPromptId = null;
+    // If the user hasn't pinned a seed, generate a fresh random one for this
+    // run. Stash it so the "Reuse last seed" button has something to bind to.
+    const useSeed = seed >= 0 ? seed : randomSeed();
+    // Hires "upscale" toggle: paint at 1.5× the requested resolution. Rounded
+    // to the nearest 64 px (latent grid alignment).
+    const w = upscale ? Math.round((width  * 1.5) / 64) * 64 : width;
+    const h = upscale ? Math.round((height * 1.5) / 64) * 64 : height;
     try {
       const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
       // ===== ACTUAL CALL TO THE LOCAL BACKEND =====
       // (see src/comfy.js for the connector; this turns into a /prompt POST
       // when ComfyUI is reachable on settings.backendUrl)
       const out = await comfyGenerate({
-        backendUrl: settings.backendUrl,
-        workflow:   settings.workflow,
+        backendUrl:     settings.backendUrl,
+        workflow:       settings.workflow,
         prompt,
-        imageFile:  imgFile,
+        negativePrompt: negativePrompt || undefined,
+        imageFile:      imgFile,
+        checkpoint:     genCheckpoint || undefined,
+        width:          w,
+        height:         h,
+        steps,
+        cfg,
+        sampler,
+        scheduler,
+        seed:           useSeed,
         onProgress: (ev) => {
           if (ev && ev.stage)    setStage(ev.stage);
           if (ev && ev.promptId) { receivedPromptId = ev.promptId; setPendingPromptId(ev.promptId); }
         },
       });
+      setLastSeed(useSeed);
       setResult({
         kind: "comfy",
         outputs: out.outputs,
         promptId: out.promptId,
+        seed: useSeed,
         prompt, style, model,
         generatedAt: new Date().toLocaleTimeString(),
       });
@@ -394,6 +452,157 @@ function CreationPanel({ settings, connection, onOpenSettings, onScrollTo, resul
           </div>
           <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={4} className={inputCls + " text-sm scroll-thin"} placeholder="Describe the animation you want…" />
         </div>
+
+        {/* Negative Prompt — what to keep OUT of the image */}
+        <div className="mt-3">
+          <div className="text-xs text-cyan-300 mb-1 font-medium">
+            Negative Prompt
+            <span className="text-slate-400 font-normal ml-2">— what to avoid (e.g. "blurry, watermark, extra fingers")</span>
+          </div>
+          <textarea
+            value={negativePrompt}
+            onChange={e => setNegativePrompt(e.target.value)}
+            rows={2}
+            className={inputCls + " text-sm scroll-thin"}
+            placeholder="text, watermark, blurry, low quality"
+          />
+        </div>
+
+        {/* ===== Advanced Settings (collapsible) ===== */}
+        <details className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3 group">
+          <summary className="cursor-pointer text-xs font-semibold text-violet-300 select-none">
+            ⚙ Advanced Settings · <span className="text-slate-400 font-normal">checkpoint, resolution, steps, CFG, sampler, seed, upscale</span>
+          </summary>
+
+          <div className="mt-3 space-y-3">
+            {/* Checkpoint (model file) */}
+            <label className="block">
+              <div className="text-xs text-cyan-300 mb-1 font-medium">
+                Checkpoint
+                <span className="text-slate-400 font-normal ml-2">— which .safetensors model file to load</span>
+              </div>
+              {Array.isArray(checkpoints) && checkpoints.length > 0 ? (
+                <select value={genCheckpoint} onChange={e => setGenCheckpoint(e.target.value)} className={inputCls + " text-sm font-mono"}>
+                  <option value="" className="bg-slate-900">(use whatever the workflow has)</option>
+                  {checkpoints.map(c => <option key={c} value={c} className="bg-slate-900">{c}</option>)}
+                </select>
+              ) : (
+                <div className="text-xs text-slate-400 italic px-2 py-1.5 rounded-lg bg-black/20 border border-white/10">
+                  No checkpoints loaded — click Test Connection in Local AI Setup to populate.
+                </div>
+              )}
+            </label>
+
+            {/* Width / Height */}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Width <span className="text-slate-400 font-normal">px</span>
+                </div>
+                <input type="number" min="64" max="2048" step="64" value={width} onChange={e => setWidth(Math.max(64, +e.target.value || 64))} className={inputCls + " text-sm"} />
+              </label>
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">
+                  Height <span className="text-slate-400 font-normal">px</span>
+                </div>
+                <input type="number" min="64" max="2048" step="64" value={height} onChange={e => setHeight(Math.max(64, +e.target.value || 64))} className={inputCls + " text-sm"} />
+              </label>
+            </div>
+            <div className="-mt-2 text-[11px] text-slate-400">
+              Resolution. SD 1.5 was trained at 512×512; 768×768 still looks great and is the recommended default. Bigger → more VRAM + slower.
+            </div>
+
+            {/* Steps */}
+            <label className="block">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-cyan-300 font-medium">
+                  Steps <span className="text-slate-400 font-normal">— more = more detail, slower</span>
+                </span>
+                <span className="text-xs text-white font-mono">{steps}</span>
+              </div>
+              <input type="range" min="1" max="100" value={steps} onChange={e => setSteps(+e.target.value)} className="w-full" />
+              <div className="text-[11px] text-slate-400 mt-0.5">20–40 is the sweet spot for most samplers. 30 is the recommended default.</div>
+            </label>
+
+            {/* CFG */}
+            <label className="block">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-cyan-300 font-medium">
+                  CFG <span className="text-slate-400 font-normal">— prompt strength (low = creative, high = literal)</span>
+                </span>
+                <span className="text-xs text-white font-mono">{cfg}</span>
+              </div>
+              <input type="range" min="1" max="20" step="0.5" value={cfg} onChange={e => setCfg(+e.target.value)} className="w-full" />
+              <div className="text-[11px] text-slate-400 mt-0.5">4–8 for most prompts. Default 7. &gt;12 starts looking burnt / over-saturated.</div>
+            </label>
+
+            {/* Sampler + Scheduler */}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">Sampler <span className="text-slate-400 font-normal">— how denoising steps are chained</span></div>
+                <select value={sampler} onChange={e => setSampler(e.target.value)} className={inputCls + " text-sm"}>
+                  {SAMPLERS.map(s => <option key={s.v} value={s.v} className="bg-slate-900">{s.l}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <div className="text-xs text-cyan-300 mb-1 font-medium">Scheduler <span className="text-slate-400 font-normal">— noise schedule curve</span></div>
+                <select value={scheduler} onChange={e => setScheduler(e.target.value)} className={inputCls + " text-sm"}>
+                  {SCHEDULERS.map(s => <option key={s.v} value={s.v} className="bg-slate-900">{s.l}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="-mt-2 text-[11px] text-slate-400">
+              <span className="text-violet-300">DPM++ 2M</span> + <span className="text-violet-300">Karras</span> is a strong, fast, modern default.
+            </div>
+
+            {/* Seed + Reuse + Vary + Random */}
+            <div className="block">
+              <div className="text-xs text-cyan-300 mb-1 font-medium">
+                Seed <span className="text-slate-400 font-normal">— same seed + same settings = same image. -1 means random.</span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <input
+                  type="number"
+                  value={seed}
+                  onChange={e => setSeed(parseInt(e.target.value, 10) || 0)}
+                  className={inputCls + " text-sm font-mono flex-1 min-w-[140px]"}
+                />
+                <GhostBtn onClick={() => setSeed(-1)} title="Use a fresh random seed on the next generation">🎲 Random</GhostBtn>
+                <GhostBtn
+                  onClick={() => { if (lastSeed != null) setSeed(lastSeed); }}
+                  disabled={lastSeed == null}
+                  title={lastSeed != null ? "Reuse the seed from the last render: " + lastSeed : "No previous seed yet — run a generation first"}
+                >♻ Reuse last</GhostBtn>
+                <GhostBtn
+                  onClick={() => setSeed(randomSeed())}
+                  title="Roll a new random seed RIGHT NOW (visible in the field) so you can compare to it later"
+                >✨ Vary</GhostBtn>
+              </div>
+              {lastSeed != null && (
+                <div className="text-[11px] text-slate-400 mt-1">
+                  Last render used seed <code className="bg-black/30 px-1 rounded font-mono">{lastSeed}</code>
+                </div>
+              )}
+            </div>
+
+            {/* Upscale */}
+            <div className="flex items-center justify-between rounded-xl bg-black/20 border border-white/10 px-3 py-2">
+              <div>
+                <div className="text-sm text-white">Upscale (hires)</div>
+                <div className="text-[11px] text-slate-400">
+                  Paint at 1.5× the requested resolution. More VRAM, slower, but cleaner edges.
+                </div>
+              </div>
+              <button
+                onClick={() => setUpscale(v => !v)}
+                className={"relative w-11 h-6 rounded-full transition " + (upscale ? "bg-gradient-to-r from-violet-500 to-cyan-500" : "bg-white/10 border border-white/10")}
+                title="Toggle hires upscale"
+              >
+                <span className={"absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition " + (upscale ? "left-5" : "left-0.5")} />
+              </button>
+            </div>
+          </div>
+        </details>
 
         <SecondaryBtn className="mt-3 w-full">+ Add Character</SecondaryBtn>
 
@@ -2493,7 +2702,15 @@ export default function App() {
         <Navbar theme={theme} setTheme={setTheme} onOpenSettings={() => setOpenSettings(true)} />
         <Hero />
         <section id="studio" className="max-w-7xl mx-auto px-4 md:px-6 pb-4">
-          <CreationPanel settings={settings} connection={connection} onOpenSettings={() => setOpenSettings(true)} onScrollTo={scrollTo} result={result} setResult={setResult} />
+          <CreationPanel
+            settings={settings}
+            connection={connection}
+            checkpoints={checkpoints}
+            onOpenSettings={() => setOpenSettings(true)}
+            onScrollTo={scrollTo}
+            result={result}
+            setResult={setResult}
+          />
         </section>
         <StickmanBuilder />
         <LocalAISetup
