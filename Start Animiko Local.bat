@@ -19,9 +19,9 @@ set "COMFY_DIR=C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portab
 
 REM --- Animiko project path (default; auto-detect below replaces it
 REM     if it isn't valid, and we'll auto-clone if nothing is found) ---
-set "ANIMIKO_DIR=C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
+set "ANIMIKO_DIR=C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
 REM   The default location to clone into if no existing Animiko is found:
-set "ANIMIKO_CLONE_DIR=C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
+set "ANIMIKO_CLONE_DIR=C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
 
 echo ============================================================
 echo   Animiko Local Launcher
@@ -116,12 +116,12 @@ REM --- Auto-detect Animiko: try the configured path, then known alternates,
 REM     then %USERPROFILE% variants. First valid match wins. ---
 if not exist "%ANIMIKO_DIR%\package.json" set "ANIMIKO_DIR="
 
-if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
 if not defined ANIMIKO_DIR call :find_animiko "C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
 if not defined ANIMIKO_DIR call :find_animiko "%USERPROFILE%\Desktop\Jc\Claude\animiko-local"
-if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
 if not defined ANIMIKO_DIR call :find_animiko "C:\Users\ongcz\Desktop\animiko-local"
 if not defined ANIMIKO_DIR call :find_animiko "%USERPROFILE%\Desktop\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\animiko-local"
 
 REM --- If still nothing, auto-clone into the configured destination ---
 if not defined ANIMIKO_DIR (
