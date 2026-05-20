@@ -212,6 +212,49 @@ export async function generate({ backendUrl, workflow, prompt, imageFile, onProg
   return { outputs, promptId: queued.prompt_id, raw: result };
 }
 
+// Query ComfyUI for the list of installed checkpoint files. Used by the
+// System Status card so the user can see exactly what models are available
+// and by loadTestWorkflow to pick the first one if v1-5-pruned-emaonly is
+// not present.
+export async function listCheckpoints(backendUrl) {
+  try {
+    const r = await fetch(joinUrl(backendUrl, "/object_info/CheckpointLoaderSimple"));
+    if (!r.ok) return { ok: false, error: "HTTP " + r.status };
+    const data = await r.json();
+    // Path: CheckpointLoaderSimple.input.required.ckpt_name = [ [list of files], { tooltip: ... } ]
+    const node = data.CheckpointLoaderSimple || {};
+    const req  = (node.input || {}).required || {};
+    const raw  = req.ckpt_name || [];
+    const names = Array.isArray(raw[0]) ? raw[0] : [];
+    return { ok: true, checkpoints: names };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+}
+
+// Parse the system_stats payload into a tidy { os, python, comfyui, gpus[] }
+// shape. Each gpu = { name, vramTotalMB, vramFreeMB, type }.
+export function summarizeSystem(data) {
+  if (!data) return null;
+  const sys = data.system || {};
+  const devices = Array.isArray(data.devices) ? data.devices : [];
+  const gpus = devices.map(d => ({
+    name:         d.name || "(unknown)",
+    type:         d.type || "",
+    index:        d.index ?? null,
+    vramTotalMB:  d.vram_total ? Math.round(d.vram_total / (1024 * 1024)) : null,
+    vramFreeMB:   d.vram_free  ? Math.round(d.vram_free  / (1024 * 1024)) : null,
+  }));
+  return {
+    os:          sys.os || "",
+    python:      sys.python_version || "",
+    comfyui:     sys.comfyui_version || "",
+    ramTotalMB:  sys.ram_total ? Math.round(sys.ram_total / (1024 * 1024)) : null,
+    ramFreeMB:   sys.ram_free  ? Math.round(sys.ram_free  / (1024 * 1024)) : null,
+    gpus,
+  };
+}
+
 export { DEFAULT_URL };
 
 export default { testConnection, generate, isApiFormat, DEFAULT_URL };

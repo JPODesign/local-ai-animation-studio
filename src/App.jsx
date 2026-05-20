@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import ComfyClient, { testConnection as comfyTest, generate as comfyGenerate, checkResult as comfyCheck, isApiFormat, DEFAULT_URL } from "./comfy.js";
+import ComfyClient, {
+  testConnection as comfyTest,
+  generate       as comfyGenerate,
+  checkResult    as comfyCheck,
+  listCheckpoints as comfyListCheckpoints,
+  summarizeSystem as comfySummarize,
+  isApiFormat,
+  DEFAULT_URL,
+} from "./comfy.js";
 
 // ----------------------------------------------------------------------------
 // Built-in test workflow — the standard SD 1.5 text-to-image graph that ships
@@ -1815,7 +1823,7 @@ function ConnectionBadge({ status }) {
   return <Badge tone="slate">● Not Tested</Badge>;
 }
 
-function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, runTest }) {
+function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, runTest, systemInfo, checkpoints }) {
   // Workflow upload — same logic as the Settings modal, exposed inline.
   const onWorkflow = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -1838,14 +1846,39 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
   };
   const clearWorkflow = () => updateSettings({ workflow: null, workflowName: "" });
 
-  // "Create Test Workflow" — drops in a standard SD 1.5 text-to-image graph
-  // so the user can confirm the round-trip works before bringing their own.
-  // Requires that the ComfyUI install has v1-5-pruned-emaonly.ckpt available;
-  // the user will get a clear ComfyUI error if it's missing.
+  // "Create Test Workflow" — drops in a standard SD 1.5 text-to-image graph.
+  // Picks a real installed checkpoint (querying ComfyUI's /object_info if we
+  // already know the list) so the workflow doesn't 400 with "checkpoint not
+  // found". If NO checkpoints are installed, refuses with a clear message
+  // (and recommends downloading SD 1.5 emaonly).
   const loadTestWorkflow = () => {
+    if (Array.isArray(checkpoints) && checkpoints.length === 0) {
+      alert(
+        "No model checkpoints are installed in ComfyUI.\n\n" +
+        "ComfyUI needs at least one .ckpt or .safetensors file in:\n" +
+        "  <ComfyUI>\\models\\checkpoints\\\n\n" +
+        "Quickest fix — download Stable Diffusion 1.5 (about 4 GB):\n" +
+        "  https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors\n\n" +
+        "Save it to:\n" +
+        "  " + (settings && settings.backendUrl ? "(your ComfyUI folder)" : "<ComfyUI>") +
+        "\\ComfyUI\\models\\checkpoints\\v1-5-pruned-emaonly.safetensors\n\n" +
+        "Then click Test Connection again, then Create Test Workflow."
+      );
+      return;
+    }
+    // Pick the best available checkpoint:
+    //   1. v1-5-pruned-emaonly.* if present (the workflow's nominal default)
+    //   2. otherwise the first installed checkpoint
+    let ckpt = "v1-5-pruned-emaonly.safetensors";
+    if (Array.isArray(checkpoints) && checkpoints.length) {
+      const preferred = checkpoints.find(c => /^v1-5-pruned-emaonly\.(safetensors|ckpt)$/i.test(c));
+      ckpt = preferred || checkpoints[0];
+    }
+    const wf = JSON.parse(JSON.stringify(TEST_WORKFLOW));
+    wf["4"].inputs.ckpt_name = ckpt;
     updateSettings({
-      workflow:     JSON.parse(JSON.stringify(TEST_WORKFLOW)),
-      workflowName: "animiko-test-text2img.json",
+      workflow:     wf,
+      workflowName: "animiko-test-text2img.json (ckpt=" + ckpt + ")",
     });
   };
 
@@ -1952,6 +1985,12 @@ npm run dev`}</CodeBlock>
             <p className="text-xs text-slate-400">
               For your own workflow: in ComfyUI, open <strong>Settings → Enable Dev mode Options</strong>, then click <strong>Save (API Format)</strong> (not the plain "Save"). Upload that JSON in the Connection card below.
             </p>
+            <div className="rounded-lg bg-amber-500/10 border border-amber-400/30 p-2 text-xs text-amber-100">
+              <strong>Important:</strong> You also need at least one model checkpoint installed.
+              Download or place a Stable Diffusion checkpoint (<code className="bg-black/30 px-1 rounded">.safetensors</code> or <code className="bg-black/30 px-1 rounded">.ckpt</code>) inside{" "}
+              <code className="bg-black/30 px-1 rounded">ComfyUI\models\checkpoints</code> before clicking Generate.
+              The System Status card below lists everything ComfyUI currently sees.
+            </div>
           </ChecklistStep>
 
           <ChecklistStep number="5" title="Generate animation">
@@ -2080,6 +2119,103 @@ npm run dev`}</CodeBlock>
           </div>
         </Card>
       </div>
+
+      {/* ============ GPU / Model Status card ============ */}
+      <Card className="mb-8">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="font-semibold text-white">System Status · GPU & Models</h3>
+          <ConnectionBadge status={status} />
+        </div>
+        {status !== "connected" ? (
+          <div className="text-sm text-slate-300">
+            Click <span className="text-violet-300">Test Connection</span> in the Connection card above to populate this section with your GPU and installed-model info.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* GPU block */}
+            <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-3">
+              <div className="text-xs text-cyan-300 font-medium mb-2">GPU</div>
+              {systemInfo && systemInfo.gpus && systemInfo.gpus.length ? (
+                <div className="space-y-2">
+                  {systemInfo.gpus.map((g, i) => {
+                    const isCuda = (g.type || "").toLowerCase().includes("cuda");
+                    const clean  = g.name.replace(/^cuda:\d+\s+/, "").replace(/\s*:.*$/, "");
+                    return (
+                      <div key={i} className="text-sm text-white">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">{clean}</span>
+                          <Badge tone={isCuda ? "emerald" : "amber"}>{isCuda ? "● CUDA" : "● " + (g.type || "unknown")}</Badge>
+                        </div>
+                        {g.vramTotalMB ? (
+                          <div className="text-xs text-slate-400 mt-1">
+                            VRAM: {(g.vramTotalMB/1024).toFixed(1)} GB
+                            {g.vramFreeMB ? <> · {(g.vramFreeMB/1024).toFixed(1)} GB free</> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {systemInfo.comfyui && <div className="text-xs text-slate-400 mt-2">ComfyUI: <span className="text-slate-200">{systemInfo.comfyui}</span></div>}
+                  {systemInfo.python && <div className="text-xs text-slate-400">Python: <span className="text-slate-200">{systemInfo.python}</span></div>}
+                </div>
+              ) : (
+                <div className="text-sm text-amber-200">
+                  ComfyUI reports no GPU. It will run on CPU — generation will be extremely slow.
+                  Verify your NVIDIA drivers + CUDA install, then relaunch ComfyUI.
+                </div>
+              )}
+            </div>
+
+            {/* Checkpoints block */}
+            <div className="rounded-xl bg-slate-900/50 border border-slate-700/50 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs text-cyan-300 font-medium">Installed checkpoints</div>
+                {Array.isArray(checkpoints) && <Badge tone={checkpoints.length ? "emerald" : "rose"}>{checkpoints.length}</Badge>}
+              </div>
+              {!Array.isArray(checkpoints) ? (
+                <div className="text-sm text-slate-300">Click Test Connection to fetch the list.</div>
+              ) : checkpoints.length === 0 ? (
+                <div className="text-sm">
+                  <div className="text-rose-200 font-medium mb-1">No models installed.</div>
+                  <div className="text-slate-300 text-xs">
+                    ComfyUI's <code className="bg-black/30 px-1 rounded">models\checkpoints</code> folder is empty.
+                    Generation will fail until you add at least one <code className="bg-black/30 px-1 rounded">.safetensors</code> or <code className="bg-black/30 px-1 rounded">.ckpt</code> file.
+                  </div>
+                  <div className="mt-3 text-xs text-slate-300">
+                    Quick fix — download SD 1.5 (~4 GB):
+                  </div>
+                  <a
+                    href="https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors"
+                    target="_blank" rel="noreferrer"
+                    className="block mt-1 text-xs text-cyan-300 hover:text-cyan-200 underline break-all"
+                  >
+                    huggingface.co/runwayml/stable-diffusion-v1-5 → v1-5-pruned-emaonly.safetensors
+                  </a>
+                  <div className="text-xs text-slate-400 mt-2">
+                    Save it to <code className="bg-black/30 px-1 rounded">…\ComfyUI\models\checkpoints\</code>, then click Test Connection again.
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="text-xs text-slate-400 mb-1">
+                    {checkpoints.length} model{checkpoints.length === 1 ? "" : "s"} available:
+                  </div>
+                  <ul className="text-xs text-slate-200 space-y-0.5 max-h-32 overflow-auto pr-1">
+                    {checkpoints.map((c, i) => (
+                      <li key={i} className="font-mono truncate">• {c}</li>
+                    ))}
+                  </ul>
+                  {settings && settings.workflow && settings.workflow["4"] && settings.workflow["4"].inputs && (
+                    <div className="text-xs text-slate-400 mt-2">
+                      Test workflow uses: <span className="text-emerald-300 font-mono">{settings.workflow["4"].inputs.ckpt_name || "(not set)"}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
 
       {/* ============ Desktop Shortcut card ============ */}
       <Card className="mb-8">
@@ -2298,6 +2434,8 @@ export default function App() {
   // didn't ask for. Surfaced in the result-card header, the inline Local
   // AI Setup panel, and the idle CleanPlaceholder.
   const [connection, setConnection] = useState({ status: "untested", message: "" });
+  const [systemInfo, setSystemInfo] = useState(null);   // { os, python, comfyui, gpus[], ramTotalMB, ramFreeMB }
+  const [checkpoints, setCheckpoints] = useState(null); // string[] of installed checkpoint filenames
 
   // Normalize trailing slashes so /system_stats etc. concatenate cleanly.
   const normalizedBackendUrl = (settings.backendUrl || "").replace(/\/+$/, "");
@@ -2306,8 +2444,20 @@ export default function App() {
     setConnection({ status: "testing", message: "Pinging " + normalizedBackendUrl + "/system_stats …" });
     const r = await comfyTest(normalizedBackendUrl);
     if (r.ok) {
-      setConnection({ status: "connected", message: "ComfyUI connected — " + normalizedBackendUrl });
+      const summary = comfySummarize(r.data);
+      setSystemInfo(summary);
+      // Also fetch the checkpoint list now that we know it's reachable.
+      const ckpts = await comfyListCheckpoints(normalizedBackendUrl);
+      setCheckpoints(ckpts.ok ? ckpts.checkpoints : []);
+      const gpu = summary && summary.gpus[0];
+      const gpuLine = gpu
+        ? " · GPU: " + gpu.name.replace(/^cuda:\d+\s+/, "").replace(/\s*:.*$/, "") +
+          (gpu.vramTotalMB ? " (" + (gpu.vramTotalMB / 1024).toFixed(1) + " GB)" : "")
+        : "";
+      setConnection({ status: "connected", message: "ComfyUI connected — " + normalizedBackendUrl + gpuLine });
     } else {
+      setSystemInfo(null);
+      setCheckpoints(null);
       // fetch() throws on either "ComfyUI not running" OR a CORS preflight
       // rejection OR a Private Network Access preflight from HTTPS→127.0.0.1.
       // The browser can't tell us which — we list the four common fixes.
@@ -2352,6 +2502,8 @@ export default function App() {
           updateSettings={updateSettings}
           connection={connection}
           runTest={runConnectionTest}
+          systemInfo={systemInfo}
+          checkpoints={checkpoints}
         />
         <footer className="border-t border-white/10 mt-6">
           <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
