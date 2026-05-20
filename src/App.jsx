@@ -175,11 +175,13 @@ function Hero() {
  * ==========================================================================*/
 const TABS = ["Image or Text", "Video to Video", "Talk", "Stickman Builder", "Local AI Setup"];
 const MODELS = [
-  { value: "demo",        label: "Demo Mode" },
+  // The one that actually works first — Local ComfyUI Workflow is the
+  // only non-demo option that's plumbed end-to-end today.
+  { value: "comfy",       label: "Local ComfyUI Workflow · uses GPU" },
+  { value: "demo",        label: "Demo Mode · no GPU (preview only)" },
   { value: "animatediff", label: "Local AnimateDiff (Coming Soon)" },
   { value: "svd",         label: "Local Stable Video Diffusion (Coming Soon)" },
   { value: "wan",         label: "Local Wan Video (Coming Soon)" },
-  { value: "comfy",       label: "Local ComfyUI Workflow (Coming Soon)" },
 ];
 const STYLES = ["Cinematic", "Anime", "3D Cartoon", "Pixel Art", "Realistic", "Stickman Sketch", "Cyberpunk"];
 
@@ -345,8 +347,22 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
   const [stage, setStage] = useState("");
   const [pendingPromptId, setPendingPromptId] = useState(null); // ComfyUI prompt_id once it accepts the job
   const [errorMessage, setErrorMessage] = useState(null);  // Local AI backend / generation error shown in the result panel
+  const [errorAction,  setErrorAction]  = useState(null);  // optional { label, onClick } button shown beside the error
   // Single uploaded media item per spec: { file, name, type, url } | null
   const [uploaded, setUploaded] = useState(null);
+
+  // Auto-switch from Demo Mode to Local ComfyUI Workflow the first time
+  // the backend reports connected AND a workflow is loaded — that's the
+  // strongest signal the user actually wants real generation. Guarded by
+  // a ref so we don't fight the user if they explicitly switch back.
+  const autoSwitchedRef = useRef(false);
+  useEffect(() => {
+    if (autoSwitchedRef.current) return;
+    if (model === "demo" && connection && connection.status === "connected" && settings.workflow) {
+      setModel("comfy");
+      autoSwitchedRef.current = true;
+    }
+  }, [connection && connection.status, settings.workflow, model]);
 
   const onUpload = (e) => {
     const f = (e.target.files || [])[0];
@@ -375,11 +391,30 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
   };
 
   const generate = async () => {
-    setErrorMessage(null); // wipe any previous error on a fresh attempt
+    setErrorMessage(null);  // wipe any previous error on a fresh attempt
+    setErrorAction(null);
 
     // ---------- DEMO MODE ----------
-    // Never claims real generation. Demo result is clearly labelled.
     if (model === "demo") {
+      // If ComfyUI is fully ready, refuse to run the demo silently — that
+      // would confuse the user into thinking the GPU was used. Surface a
+      // warning with a one-click switch to Local ComfyUI Workflow.
+      if (connection && connection.status === "connected" && settings.workflow) {
+        setResult(null);
+        setErrorMessage(
+          "You are still in Demo Mode. To use your GPU and ComfyUI, switch AI Model to Local ComfyUI Workflow."
+        );
+        setErrorAction({
+          label: "Switch to Local ComfyUI Workflow",
+          onClick: () => {
+            setModel("comfy");
+            setErrorMessage(null);
+            setErrorAction(null);
+          },
+        });
+        return;
+      }
+      // Otherwise demo really is the only option (ComfyUI not set up).
       setBusy(true); setStage("rendering demo"); setResult(null);
       await new Promise(r => setTimeout(r, 3000));
       setBusy(false); setStage("");
@@ -388,24 +423,34 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
     }
 
     // ---------- LOCAL AI MODE ----------
-    // Never falls back to the demo city. Refuses with a precise message
-    // based on what's actually missing (per spec):
-    //   - explicit "disconnected" from last Test → ask for Test Connection
-    //   - connected but no workflow            → ask for workflow upload
-    //   - untested + no workflow               → ask for workflow upload
-    //   - otherwise                            → attempt; connector will
-    //                                            test connection itself
-    if (connection && connection.status === "disconnected") {
+    // Strict preflight — each missing piece gets its own precise message
+    // so the user knows EXACTLY what to do next.
+    if (!connection || connection.status !== "connected") {
       setResult(null);
-      setErrorMessage("Local AI backend is not connected. Start ComfyUI locally, then click Test Connection.");
+      setErrorMessage(
+        connection && connection.status === "disconnected"
+          ? "Local AI backend is not connected. Start ComfyUI locally, then click Test Connection."
+          : "Connection has not been tested. Open Local AI Setup and click Test Connection first."
+      );
       return;
     }
     if (!settings.workflow) {
       setResult(null);
       setErrorMessage(
-        connection && connection.status === "connected"
-          ? "ComfyUI is connected, but no workflow JSON is loaded yet. Upload a workflow JSON in Local AI Setup."
-          : "No workflow JSON loaded yet. Upload one in Local AI Setup, then click Test Connection."
+        "ComfyUI is connected, but no workflow JSON is loaded yet. Click ✨ Create Test Workflow in Local AI Setup (or upload your own API-format JSON)."
+      );
+      return;
+    }
+    // Only refuse on missing checkpoints when we KNOW the list is empty
+    // (we successfully queried /object_info and got []). null means
+    // "we haven't tested yet" — let the connector report any issue.
+    if (Array.isArray(checkpoints) && checkpoints.length === 0) {
+      setResult(null);
+      setErrorMessage(
+        "ComfyUI is connected but no model checkpoints are installed.\n\n" +
+        "Drop a .safetensors or .ckpt file into:\n" +
+        "  <ComfyUI>\\ComfyUI\\models\\checkpoints\\\n\n" +
+        "Quickest fix: double-click Download SD15 Model.bat on your Desktop, then restart ComfyUI."
       );
       return;
     }
@@ -932,6 +977,24 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
           </button>
         </div>
 
+        {/* Persistent demo-mode hint: only when ComfyUI is fully ready AND
+            the user is still in Demo Mode. One-click flip. */}
+        {model === "demo" && connection && connection.status === "connected" && settings.workflow && (
+          <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-500/15 p-3 text-xs">
+            <div className="font-semibold text-amber-100 mb-1">⚠ Still in Demo Mode</div>
+            <div className="text-amber-100/90 mb-2">
+              ComfyUI is connected and your workflow is loaded, but AI Model is set to Demo Mode (no GPU).
+              Switch to use your GPU for real generation.
+            </div>
+            <button
+              onClick={() => setModel("comfy")}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 shadow shadow-violet-900/30"
+            >
+              Switch to Local ComfyUI Workflow
+            </button>
+          </div>
+        )}
+
         <PrimaryBtn disabled={busy} onClick={generate} className="mt-4 w-full py-3 text-base">
           {busy ? (
             <>
@@ -950,17 +1013,23 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
         <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <h3 className="font-semibold text-white">Animation Results</h3>
           <div className="flex items-center gap-2 flex-wrap">
-            {model !== "demo" && (() => {
-              const ready = settings.workflow && connection && connection.status === "connected";
-              const tone  = ready ? "emerald" : (connection && connection.status === "disconnected" ? "rose" : "amber");
-              const label = ready
-                ? "ready"
-                : !settings.workflow
-                  ? "no workflow"
-                  : connection && connection.status === "disconnected" ? "not connected" : "untested";
-              return <Badge tone={tone}>Local AI · {label}</Badge>;
+            {/* Single state-machine badge. Priority:
+                  demo            → amber  "Demo Mode · no GPU"
+                  busy            → cyan   "● Rendering with ComfyUI"
+                  fully ready     → emerald "Local AI · GPU ready"
+                  disconnected    → rose   "Local AI · not connected"
+                  no workflow     → amber  "Local AI · no workflow"
+                  untested        → amber  "Local AI · untested" */}
+            {(() => {
+              if (model === "demo")        return <Badge tone="amber">Demo Mode · no GPU</Badge>;
+              if (busy)                    return <Badge tone="cyan">● Rendering with ComfyUI</Badge>;
+              const connOk = connection && connection.status === "connected";
+              if (connOk && settings.workflow) return <Badge tone="emerald">Local AI · GPU ready</Badge>;
+              if (connection && connection.status === "disconnected") return <Badge tone="rose">Local AI · not connected</Badge>;
+              if (!settings.workflow)      return <Badge tone="amber">Local AI · no workflow</Badge>;
+              return <Badge tone="amber">Local AI · untested</Badge>;
             })()}
-            <Badge tone="cyan">{model === "demo" ? "Demo Mode" : "Preview"}</Badge>
+            <Badge tone="slate">Preview</Badge>
           </div>
         </div>
 
@@ -977,6 +1046,7 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
                 prompt={prompt}
                 uploaded={uploaded}
                 onRemoveUpload={removeUpload}
+                action={errorAction}
               />
             ) : result && result.kind === "comfy" ? (
               /* PRIORITY 1: real generated output from the local backend
@@ -1296,14 +1366,26 @@ function BusyLoader({ model, stage, prompt, promptId }) {
 // Local AI backend / generation error. Replaces the canvas content so the
 // user CANNOT see a demo placeholder while in Local AI mode. Still shows
 // the prompt and the uploaded media (with X to remove) so they have context.
-function LocalAIErrorView({ message, prompt, uploaded, onRemoveUpload }) {
+function LocalAIErrorView({ message, prompt, uploaded, onRemoveUpload, action }) {
   const showUpload = !!uploaded;
+  // Distinguish "you're still in Demo Mode" from "backend down" by the
+  // text — both look like errors but the headline copy should match.
+  const isDemoWarning = /Demo Mode/i.test(message || "");
+  const headline = isDemoWarning ? "⚠ You're still in Demo Mode" : "⚠ Local AI backend not connected";
   return (
     <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 text-center overflow-auto">
       <div className="rounded-xl bg-rose-500/15 border border-rose-400/40 px-4 py-3 max-w-md text-left">
-        <div className="font-semibold text-rose-100 mb-1">⚠ Local AI backend not connected</div>
+        <div className="font-semibold text-rose-100 mb-1">{headline}</div>
         <div className="text-xs text-rose-200/90 whitespace-pre-wrap">{message}</div>
       </div>
+      {action && action.label && (
+        <button
+          onClick={action.onClick}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 shadow-lg shadow-violet-900/40 text-sm"
+        >
+          {action.label}
+        </button>
+      )}
       {showUpload && (
         <div className="relative w-36 h-24 rounded-lg overflow-hidden border border-white/10 bg-black/30">
           {((uploaded.type && uploaded.type.startsWith("image/")) || /\.gif$/i.test(uploaded.name || "")) ? (
@@ -2558,6 +2640,10 @@ function LocalAISetup({ onOpenSettings, settings, updateSettings, connection, ru
       workflow:     wf,
       workflowName: "animiko-test-text2img.json (ckpt=" + ckpt + ")",
     });
+    // The Studio panel auto-flips AI Model from "demo" → "comfy" via an
+    // effect on (connection.status, settings.workflow). Loading a test
+    // workflow here is one of the two triggers that flips it (the other
+    // is Test Connection success).
   };
 
   const status = (connection && connection.status) || "untested";
