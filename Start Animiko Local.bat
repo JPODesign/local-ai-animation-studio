@@ -170,19 +170,56 @@ echo.
 
 echo [2/3] Starting Animiko...
 echo       (a separate window titled "Animiko" will open)
-start "Animiko" /D "%ANIMIKO_DIR%" cmd /k "git pull & if not exist node_modules ( echo Installing dependencies, first run only... & npm install ) & echo Starting Animiko dev server... & npm run dev"
+REM Always run npm install — it's a no-op when node_modules is up to date,
+REM and avoids the "missing deps" trap when package.json changed since the
+REM last run.
+start "Animiko" /D "%ANIMIKO_DIR%" cmd /k "echo === git pull === & git pull & echo === npm install === & npm install & echo === Starting Animiko dev server (Vite) === & npm run dev"
 echo       Wait for: "Local:   http://localhost:5173/"
 echo.
 
-echo [3/3] Opening Animiko in browser in ~10 seconds...
-timeout /t 10 /nobreak >nul
-start "" "http://localhost:5173"
+echo [3/3] Waiting for Animiko to become ready (up to 60 seconds)...
+echo       Probing http://localhost:5173, 5174, 5175 ...
+set "ANIMIKO_URL="
+for /l %%I in (1,1,60) do (
+    if not defined ANIMIKO_URL call :probe_port 5173
+    if not defined ANIMIKO_URL call :probe_port 5174
+    if not defined ANIMIKO_URL call :probe_port 5175
+    if defined ANIMIKO_URL goto :url_ready
+    <nul set /p "=."
+    timeout /t 1 /nobreak >nul
+)
+:url_ready
+echo.
+
+if not defined ANIMIKO_URL (
+    echo.
+    echo ============================================================
+    echo   [ERROR] Animiko did not start within 60 seconds.
+    echo ============================================================
+    echo   Animiko did not start. Check the Animiko terminal for npm/node errors.
+    echo.
+    echo   Common causes:
+    echo     - Node.js is not installed or not on PATH
+    echo       Install LTS from https://nodejs.org/
+    echo     - npm install failed (look at the Animiko terminal for the exact line)
+    echo     - Port 5173 already in use by another process
+    echo     - git pull failed due to local changes
+    echo.
+    echo   The Animiko terminal stays open so you can read the error.
+    echo   Fix the issue, then re-run this launcher.
+    pause
+    exit /b 1
+)
+
+echo [OK]  Animiko is ready at !ANIMIKO_URL!
+echo Opening !ANIMIKO_URL! in your default browser...
+start "" "!ANIMIKO_URL!"
 echo.
 
 echo ============================================================
-echo   Animiko should now be running.
+echo   Animiko is running.
 echo ============================================================
-echo   Animiko UI:    http://localhost:5173
+echo   Animiko UI:    !ANIMIKO_URL!
 echo   ComfyUI API:   http://127.0.0.1:8188
 echo.
 echo   Do NOT close the ComfyUI or Animiko terminal windows
@@ -217,6 +254,20 @@ REM   Sets ANIMIKO_DIR to %~1 if it contains package.json.
 if defined ANIMIKO_DIR goto :eof
 if not exist "%~1\package.json" goto :eof
 set "ANIMIKO_DIR=%~1"
+goto :eof
+
+REM :probe_port <port>
+REM   curl-pings http://localhost:<port>. Sets ANIMIKO_URL if the port
+REM   accepts a connection. Uses --connect-timeout 1 so a closed port
+REM   fails fast and we can try the next one immediately.
+REM   NOTE: do NOT use ">nul 2>&1" here — that swallows curl's exit code
+REM   on some Windows cmd setups and breaks the errorlevel check. The
+REM   -s flag is enough to silence curl's own output.
+:probe_port
+if defined ANIMIKO_URL goto :eof
+curl.exe -s -o NUL --connect-timeout 1 -m 3 "http://localhost:%~1"
+if errorlevel 1 goto :eof
+set "ANIMIKO_URL=http://localhost:%~1"
 goto :eof
 
 REM :deep_search <root>
