@@ -17,8 +17,11 @@ REM This wins over auto-detect. If you move ComfyUI, edit this line OR
 REM clear it (set "COMFY_DIR=") to let the search below find it.
 set "COMFY_DIR=C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
 
-REM --- Animiko project path (edit if your clone is elsewhere) ---
-set "ANIMIKO_DIR=C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
+REM --- Animiko project path (default; auto-detect below replaces it
+REM     if it isn't valid, and we'll auto-clone if nothing is found) ---
+set "ANIMIKO_DIR=C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
+REM   The default location to clone into if no existing Animiko is found:
+set "ANIMIKO_CLONE_DIR=C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
 
 echo ============================================================
 echo   Animiko Local Launcher
@@ -109,17 +112,55 @@ echo [OK]  ComfyUI Portable detected at:
 echo       %COMFY_DIR%
 echo.
 
-REM --- Validate Animiko folder ---
+REM --- Auto-detect Animiko: try the configured path, then known alternates,
+REM     then %USERPROFILE% variants. First valid match wins. ---
+if not exist "%ANIMIKO_DIR%\package.json" set "ANIMIKO_DIR="
+
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\Jc\Claude\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "%USERPROFILE%\Desktop\Jc\Claude\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\Charm\Desktop\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "C:\Users\ongcz\Desktop\animiko-local"
+if not defined ANIMIKO_DIR call :find_animiko "%USERPROFILE%\Desktop\animiko-local"
+
+REM --- If still nothing, auto-clone into the configured destination ---
+if not defined ANIMIKO_DIR (
+    echo [INFO] No Animiko clone found; cloning into:
+    echo        %ANIMIKO_CLONE_DIR%
+    REM   Make sure the parent folder exists.
+    for %%X in ("%ANIMIKO_CLONE_DIR%") do set "_animiko_parent=%%~dpX"
+    if not exist "!_animiko_parent!" (
+        mkdir "!_animiko_parent!" 2>nul
+        if errorlevel 1 (
+            echo [ERROR] Could not create parent folder:
+            echo         !_animiko_parent!
+            echo Check that the user profile exists and you have write access,
+            echo or edit ANIMIKO_CLONE_DIR at the top of this .bat file.
+            pause
+            exit /b 1
+        )
+    )
+    REM   Clone the repo.
+    git clone https://github.com/JPODesign/local-ai-animation-studio.git "%ANIMIKO_CLONE_DIR%"
+    if errorlevel 1 (
+        echo [ERROR] git clone failed. Make sure Git is installed and on PATH:
+        echo         https://git-scm.com/download/win
+        pause
+        exit /b 1
+    )
+    set "ANIMIKO_DIR=%ANIMIKO_CLONE_DIR%"
+)
+
+REM --- Final validation ---
 if not exist "%ANIMIKO_DIR%\package.json" (
-    echo [ERROR] Animiko folder not found at:
+    echo [ERROR] Animiko folder is missing package.json:
     echo         %ANIMIKO_DIR%
-    echo.
-    echo Edit ANIMIKO_DIR at the top of this .bat file, or clone the project:
-    echo     cd C:\Users\%USERNAME%\Desktop\Jc\Claude
-    echo     git clone https://github.com/JPODesign/local-ai-animation-studio.git animiko-local
     pause
     exit /b 1
 )
+echo [OK]  Animiko found at:
+echo       %ANIMIKO_DIR%
+echo.
 
 echo [1/3] Starting ComfyUI...
 echo       (a separate window titled "ComfyUI" will open)
@@ -168,6 +209,14 @@ if defined COMFY_DIR goto :eof
 if not exist "%~1\python_embeded\python.exe" goto :eof
 if not exist "%~1\ComfyUI\main.py" goto :eof
 set "COMFY_DIR=%~1"
+goto :eof
+
+REM :find_animiko <candidate>
+REM   Sets ANIMIKO_DIR to %~1 if it contains package.json.
+:find_animiko
+if defined ANIMIKO_DIR goto :eof
+if not exist "%~1\package.json" goto :eof
+set "ANIMIKO_DIR=%~1"
 goto :eof
 
 REM :deep_search <root>
