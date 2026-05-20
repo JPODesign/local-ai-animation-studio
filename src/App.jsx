@@ -229,6 +229,44 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
   const [seed,     setSeed]     = useState(-1);                    // -1 = random next time
   const [lastSeed, setLastSeed] = useState(null);                  // last seed actually used
   const [upscale,  setUpscale]  = useState(false);                 // hires multiplier (×1.5)
+
+  // --- Prompt Accuracy · structured fields ---
+  const [subject,     setSubject]     = useState("");
+  const [styleField,  setStyleField]  = useState("");   // free-text art-style note (distinct from the STYLES preset)
+  const [background,  setBackground]  = useState("");
+  const [lighting,    setLighting]    = useState("");
+  const [moodField,   setMoodField]   = useState("");
+  const [mustInclude, setMustInclude] = useState("");
+  const [mustAvoid,   setMustAvoid]   = useState("");
+  const [strictAdherence, setStrictAdherence] = useState(false);
+
+  // --- Trend Mode ---
+  const [trendMode,   setTrendMode]   = useState(false);
+  const [trendSource, setTrendSource] = useState("X / Twitter");
+  const [trendNotes,  setTrendNotes]  = useState("");
+
+  // --- Enhanced prompt (built by the Enhance button OR pasted manually) ---
+  const [enhancedPrompt, setEnhancedPrompt] = useState("");
+
+  // Compose a single enhanced prompt string from every active field.
+  // Higher-emphasis fragments use ComfyUI's (text:weight) weighting syntax.
+  const buildEnhancedPrompt = () => {
+    const parts = [];
+    if (prompt.trim())         parts.push(prompt.trim());
+    if (subject.trim())        parts.push(subject.trim());
+    if (styleField.trim())     parts.push(styleField.trim() + " style");
+    if (background.trim())     parts.push("background: " + background.trim());
+    if (lighting.trim())       parts.push(lighting.trim() + " lighting");
+    if (moodField.trim())      parts.push(moodField.trim() + " mood");
+    if (mustInclude.trim())    parts.push("(must include: " + mustInclude.trim() + ":1.3)");
+    if (trendMode && trendNotes.trim()) {
+      parts.push("(" + trendSource + " trending: " + trendNotes.trim() + ":1.2)");
+    }
+    if (style)                 parts.push(style.toLowerCase() + ", highly detailed, masterpiece");
+    return parts.join(", ");
+  };
+  const enhanceNow = () => setEnhancedPrompt(buildEnhancedPrompt());
+  const clearEnhanced = () => setEnhancedPrompt("");
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
@@ -310,6 +348,13 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
     // to the nearest 64 px (latent grid alignment).
     const w = upscale ? Math.round((width  * 1.5) / 64) * 64 : width;
     const h = upscale ? Math.round((height * 1.5) / 64) * 64 : height;
+    // Compose what we actually send to the backend:
+    //   - effectivePrompt   = enhanced prompt if the user built one, else raw prompt
+    //   - effectiveNegative = negative prompt + the "must avoid" structured field
+    //   - effectiveCfg      = cfg + 3 (capped at 20) when "Strict prompt adherence" is on
+    const effectivePrompt   = enhancedPrompt.trim() ? enhancedPrompt.trim() : prompt;
+    const effectiveNegative = [negativePrompt, mustAvoid].map(s => s && s.trim()).filter(Boolean).join(", ");
+    const effectiveCfg      = strictAdherence ? Math.min(20, cfg + 3) : cfg;
     try {
       const imgFile = (uploaded && uploaded.type && uploaded.type.startsWith("image/")) ? uploaded.file : null;
       // ===== ACTUAL CALL TO THE LOCAL BACKEND =====
@@ -318,14 +363,14 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
       const out = await comfyGenerate({
         backendUrl:     settings.backendUrl,
         workflow:       settings.workflow,
-        prompt,
-        negativePrompt: negativePrompt || undefined,
+        prompt:         effectivePrompt,
+        negativePrompt: effectiveNegative || undefined,
         imageFile:      imgFile,
         checkpoint:     genCheckpoint || undefined,
         width:          w,
         height:         h,
         steps,
-        cfg,
+        cfg:            effectiveCfg,
         sampler,
         scheduler,
         seed:           useSeed,
@@ -335,12 +380,30 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
         },
       });
       setLastSeed(useSeed);
+      const effectiveCheckpoint =
+        genCheckpoint ||
+        (settings.workflow && settings.workflow["4"] && settings.workflow["4"].inputs && settings.workflow["4"].inputs.ckpt_name) ||
+        "(workflow default)";
       setResult({
         kind: "comfy",
         outputs: out.outputs,
         promptId: out.promptId,
         seed: useSeed,
-        prompt, style, model,
+        // Full metadata for the result-panel "details" view:
+        prompt,
+        enhancedPrompt: enhancedPrompt.trim() || null,
+        effectivePrompt,
+        effectiveNegative: effectiveNegative || null,
+        trendNotes:  trendMode && trendNotes.trim() ? trendNotes.trim() : null,
+        trendSource: trendMode && trendNotes.trim() ? trendSource          : null,
+        fields: { subject, style: styleField, background, lighting, mood: moodField, mustInclude, mustAvoid },
+        checkpoint:  effectiveCheckpoint,
+        steps,
+        cfg:         effectiveCfg,
+        sampler, scheduler,
+        width: w, height: h,
+        strictAdherence,
+        style, model,
         generatedAt: new Date().toLocaleTimeString(),
       });
     } catch (e) {
@@ -466,6 +529,132 @@ function CreationPanel({ settings, connection, checkpoints, onOpenSettings, onSc
             className={inputCls + " text-sm scroll-thin"}
             placeholder="text, watermark, blurry, low quality"
           />
+        </div>
+
+        {/* ===== Prompt Accuracy · Structured Fields ===== */}
+        <details className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-violet-300 select-none">
+            🎯 Prompt Accuracy · <span className="text-slate-400 font-normal">structured fields + strict adherence</span>
+          </summary>
+          <div className="mt-3 space-y-2.5">
+            {[
+              { key: "subject",     label: "Subject",      hint: "the main thing — e.g. 'a fluffy orange tabby cat'",                set: setSubject,     val: subject     },
+              { key: "style",       label: "Style",        hint: "art style — e.g. 'watercolor', 'photorealistic', 'cel-shaded anime'", set: setStyleField,  val: styleField  },
+              { key: "background",  label: "Background",   hint: "scene behind the subject — e.g. 'wooden porch at golden hour'",     set: setBackground,  val: background  },
+              { key: "lighting",    label: "Lighting",     hint: "lighting setup — e.g. 'soft cinematic rim lighting'",               set: setLighting,    val: lighting    },
+              { key: "mood",        label: "Mood",         hint: "emotional tone — e.g. 'peaceful, dreamy'",                          set: setMoodField,   val: moodField   },
+              { key: "mustInclude", label: "Must include", hint: "elements that should definitely appear (weighted ×1.3)",            set: setMustInclude, val: mustInclude },
+              { key: "mustAvoid",   label: "Must avoid",   hint: "merged into the Negative Prompt above for this generation",         set: setMustAvoid,   val: mustAvoid   },
+            ].map(f => (
+              <label key={f.key} className="block">
+                <div className="text-xs text-cyan-300 font-medium">
+                  {f.label} <span className="text-slate-400 font-normal">— {f.hint}</span>
+                </div>
+                <input type="text" value={f.val} onChange={e => f.set(e.target.value)} className={inputCls + " text-xs mt-0.5"} placeholder={f.hint} />
+              </label>
+            ))}
+
+            {/* Strict adherence toggle */}
+            <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/10 px-3 py-2">
+              <div>
+                <div className="text-sm text-white">Strict prompt adherence</div>
+                <div className="text-[11px] text-slate-400">
+                  Bumps CFG by +3 ({cfg} → {Math.min(20, cfg + 3)}) so the model follows the prompt more literally. Trade-off: less creative variation.
+                </div>
+              </div>
+              <button
+                onClick={() => setStrictAdherence(v => !v)}
+                className={"relative w-11 h-6 rounded-full transition " + (strictAdherence ? "bg-gradient-to-r from-violet-500 to-cyan-500" : "bg-white/10 border border-white/10")}
+                title="Toggle strict adherence"
+              >
+                <span className={"absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition " + (strictAdherence ? "left-5" : "left-0.5")} />
+              </button>
+            </div>
+          </div>
+        </details>
+
+        {/* ===== Trend Mode ===== */}
+        <details className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-violet-300 select-none">
+            📈 Trend Mode · <span className="text-slate-400 font-normal">latest internet trends</span>
+          </summary>
+          <div className="mt-3 space-y-2.5">
+            <div className="flex items-center justify-between rounded-lg bg-black/20 border border-white/10 px-3 py-2">
+              <div>
+                <div className="text-sm text-white">Use latest internet trends</div>
+                <div className="text-[11px] text-slate-400">Merges Trend Notes (below) into the final prompt with extra weight (×1.2).</div>
+              </div>
+              <button
+                onClick={() => setTrendMode(v => !v)}
+                className={"relative w-11 h-6 rounded-full transition " + (trendMode ? "bg-gradient-to-r from-violet-500 to-cyan-500" : "bg-white/10 border border-white/10")}
+                title="Toggle trend mode"
+              >
+                <span className={"absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition " + (trendMode ? "left-5" : "left-0.5")} />
+              </button>
+            </div>
+
+            <label className="block">
+              <div className="text-xs text-cyan-300 font-medium mb-1">Trend source <span className="text-slate-400 font-normal">— for labeling only; doesn't fetch live</span></div>
+              <select
+                value={trendSource}
+                onChange={e => setTrendSource(e.target.value)}
+                className={inputCls + " text-sm"}
+                disabled={!trendMode}
+              >
+                {["X / Twitter", "TikTok", "Instagram", "Google Trends", "Reddit"].map(s => <option key={s} className="bg-slate-900">{s}</option>)}
+              </select>
+            </label>
+
+            <label className="block">
+              <div className="text-xs text-cyan-300 font-medium mb-1">
+                Trend Notes <span className="text-slate-400 font-normal">— paste current trend research: style, topic, mood, colors, composition</span>
+              </div>
+              <textarea
+                value={trendNotes}
+                onChange={e => setTrendNotes(e.target.value)}
+                rows={3}
+                className={inputCls + " text-xs scroll-thin"}
+                placeholder="e.g. 'isekai 4K wallpaper with bokeh foreground, muted cyan + warm orange, low-angle hero shot, currently trending on X #aiart'"
+                disabled={!trendMode}
+              />
+            </label>
+
+            <div className="text-[11px] text-amber-200/80 bg-amber-500/10 border border-amber-400/30 rounded-lg p-2">
+              Live API fetching is not built in — paste research manually for now. Anything you put in Trend Notes gets folded into the enhanced prompt when you click Enhance.
+            </div>
+          </div>
+        </details>
+
+        {/* ===== Enhanced Prompt + Enhance button ===== */}
+        <div className="mt-3 rounded-xl bg-white/5 border border-white/10 p-3">
+          <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-violet-300">✨ Enhanced Prompt</span>
+            <div className="flex items-center gap-1">
+              <GhostBtn onClick={enhanceNow} title="Combine prompt + structured fields + trend notes into one weighted prompt">
+                ✨ Enhance Prompt
+              </GhostBtn>
+              {enhancedPrompt.trim() && (
+                <GhostBtn onClick={clearEnhanced} title="Clear enhanced prompt — generation will use the plain Prompt above">Clear</GhostBtn>
+              )}
+            </div>
+          </div>
+          <textarea
+            value={enhancedPrompt}
+            onChange={e => setEnhancedPrompt(e.target.value)}
+            rows={3}
+            className={inputCls + " text-xs scroll-thin font-mono"}
+            placeholder="Click Enhance Prompt to compose, or paste/edit your own final prompt here."
+          />
+          <div className="text-[11px] text-slate-400 mt-1">
+            {enhancedPrompt.trim()
+              ? <>✓ Enhanced prompt active — this will be sent to ComfyUI instead of the plain Prompt above.</>
+              : <>Empty — the plain Prompt at the top will be used.</>}
+          </div>
+        </div>
+
+        {/* Reference image note */}
+        <div className="mt-3 rounded-lg bg-cyan-500/5 border border-cyan-400/20 p-2 text-[11px] text-cyan-100/80">
+          🖼 <strong>Reference image:</strong> any image you drop into the Upload Media box above is sent to ComfyUI's <code className="bg-black/30 px-1 rounded">LoadImage</code> node (when the workflow has one) for img2img / ControlNet-style guidance. The built-in test workflow is pure text-to-image and ignores uploads — connect an img2img workflow if you want this.
         </div>
 
         {/* ===== Advanced Settings (collapsible) ===== */}
@@ -989,15 +1178,21 @@ function DemoResult({ result }) {
 
 function ComfyResult({ result }) {
   const [idx, setIdx] = useState(0);
+  const [showDetails, setShowDetails] = useState(false);
   const out = result.outputs[Math.min(idx, result.outputs.length - 1)];
   return (
     <div className="w-full h-full relative bg-black/40 flex items-center justify-center">
       {out.mime.indexOf("video") === 0
         ? <video src={out.url} controls autoPlay loop className="max-w-full max-h-full" />
         : <img src={out.url} alt={out.filename} className="max-w-full max-h-full object-contain" />}
-      <div className="absolute top-3 right-3 flex gap-2">
+      <div className="absolute top-3 right-3 flex gap-2 items-center">
         <Badge tone="emerald">Local ComfyUI</Badge>
         {result.outputs.length > 1 && <Badge tone="violet">{idx + 1}/{result.outputs.length}</Badge>}
+        <button
+          onClick={() => setShowDetails(v => !v)}
+          title="Show full generation details"
+          className="text-xs px-2 py-0.5 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/20"
+        >{showDetails ? "Hide ▲" : "Details ▼"}</button>
       </div>
       {result.outputs.length > 1 && (
         <div className="absolute inset-y-0 left-0 right-0 flex justify-between items-center px-2 pointer-events-none">
@@ -1005,10 +1200,65 @@ function ComfyResult({ result }) {
           <button onClick={() => setIdx(i => Math.min(result.outputs.length - 1, i + 1))} className="pointer-events-auto w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10">›</button>
         </div>
       )}
-      <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between gap-3">
-        <div className="truncate"><span className="text-slate-400">prompt:</span> {result.prompt}</div>
-        <a href={out.url} download={out.filename} className="text-cyan-300 hover:text-cyan-200 underline whitespace-nowrap">download {out.filename}</a>
-      </div>
+      {showDetails ? (
+        /* Full details overlay — covers the bottom half of the panel
+           with everything that actually went into the generation. */
+        <div className="absolute bottom-0 left-0 right-0 max-h-[60%] overflow-auto bg-black/85 backdrop-blur border-t border-white/15 p-3 text-xs text-slate-200 space-y-1.5">
+          <DetailRow label="Original prompt"  value={result.prompt} />
+          {result.enhancedPrompt && <DetailRow label="Enhanced prompt" value={result.enhancedPrompt} />}
+          <DetailRow label="Sent to ComfyUI"  value={result.effectivePrompt} tone="cyan" />
+          {result.effectiveNegative && <DetailRow label="Negative" value={result.effectiveNegative} tone="rose" />}
+          {result.trendNotes && (
+            <DetailRow label={"Trend notes (" + result.trendSource + ")"} value={result.trendNotes} tone="amber" />
+          )}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-3 gap-y-1 pt-1 border-t border-white/10">
+            <DetailKV k="Model"     v={result.checkpoint} />
+            <DetailKV k="Seed"      v={String(result.seed)} mono />
+            <DetailKV k="Steps"     v={result.steps} />
+            <DetailKV k="CFG"       v={result.cfg + (result.strictAdherence ? " (strict)" : "")} />
+            <DetailKV k="Sampler"   v={result.sampler + " / " + result.scheduler} />
+            <DetailKV k="Resolution" v={result.width + "×" + result.height} />
+            <DetailKV k="Prompt ID" v={result.promptId} mono />
+            <DetailKV k="Generated" v={result.generatedAt} />
+          </div>
+          {(result.fields && Object.values(result.fields).some(v => v && v.trim && v.trim())) && (
+            <div className="pt-1 border-t border-white/10 text-[11px]">
+              <span className="text-cyan-300 font-medium">Structured fields:</span>{" "}
+              {Object.entries(result.fields)
+                .filter(([, v]) => v && v.trim && v.trim())
+                .map(([k, v]) => k + ": " + v)
+                .join(" · ")}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="absolute bottom-2 left-3 right-3 text-xs text-slate-200 flex justify-between gap-3">
+          <div className="truncate"><span className="text-slate-400">prompt:</span> {result.effectivePrompt || result.prompt}</div>
+          <a href={out.url} download={out.filename} className="text-cyan-300 hover:text-cyan-200 underline whitespace-nowrap">download {out.filename}</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Compact label/value row used inside ComfyResult's details overlay.
+function DetailRow({ label, value, tone }) {
+  const toneClass = tone === "cyan"  ? "text-cyan-300"
+                  : tone === "rose"  ? "text-rose-300"
+                  : tone === "amber" ? "text-amber-300"
+                  :                    "text-slate-400";
+  return (
+    <div>
+      <span className={"font-medium " + toneClass}>{label}:</span>{" "}
+      <span className="text-slate-200">{value}</span>
+    </div>
+  );
+}
+function DetailKV({ k, v, mono }) {
+  return (
+    <div>
+      <span className="text-slate-400">{k}:</span>{" "}
+      <span className={"text-slate-200 " + (mono ? "font-mono" : "")}>{v}</span>
     </div>
   );
 }
