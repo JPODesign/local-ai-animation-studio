@@ -1,80 +1,99 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 REM =====================================================================
-REM   Animiko Local Launcher
+REM   Animiko Local Launcher  (auto-detect + recursive search)
 REM
-REM   1. Finds ComfyUI Portable automatically (or use the manual
-REM      override below).
-REM   2. Opens Terminal A and starts ComfyUI with --enable-cors-header *
-REM   3. Opens Terminal B and starts Animiko (git pull, npm install
-REM      only if node_modules is missing, npm run dev).
-REM   4. Opens http://localhost:5173 in the default browser after 10 s.
+REM   1. Validates the hardcoded COMFY_DIR; if it's wrong, clears it.
+REM   2. Tries a list of known fixed candidate paths.
+REM   3. If still not found, recursively scans the user-listed roots.
+REM   4. Opens Terminal A for ComfyUI (with --enable-cors-header *).
+REM   5. Opens Terminal B for Animiko (git pull, npm install if missing,
+REM      npm run dev), then opens http://localhost:5173 in the browser.
 REM =====================================================================
 
-REM --- MANUAL OVERRIDE (set to your real ComfyUI Portable folder) ---
+REM --- MANUAL OVERRIDE (hardcoded to the user's confirmed install path) ---
 REM This wins over auto-detect. If you move ComfyUI, edit this line OR
-REM clear it (set "COMFY_DIR=") to let auto-detect find it again.
+REM clear it (set "COMFY_DIR=") to let the search below find it.
 set "COMFY_DIR=C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
 
 REM --- Animiko project path (edit if your clone is elsewhere) ---
 set "ANIMIKO_DIR=C:\Users\ongcz\Desktop\Jc\Claude\animiko-local"
-
-REM --- Auto-detect ComfyUI Portable in common locations ---
-REM A folder is valid only if it contains BOTH:
-REM     python_embeded\python.exe
-REM     ComfyUI\main.py
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Desktop\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Downloads\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Desktop\Jc\Claude\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Desktop\Jc\ComfyUI_windows_portable"
-REM --- Nested-zip variants (the NVIDIA Portable extracts into a sub-folder) ---
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable_nvidia"
-if not defined COMFY_DIR call :find_comfy "C:\ComfyUI"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Desktop\ComfyUI"
-if not defined COMFY_DIR call :find_comfy "C:\Users\ongcz\Downloads\ComfyUI"
-if not defined COMFY_DIR call :find_comfy "D:\ComfyUI_windows_portable"
-if not defined COMFY_DIR call :find_comfy "D:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
 
 echo ============================================================
 echo   Animiko Local Launcher
 echo ============================================================
 echo.
 
+REM --- Validate the hardcoded path; clear it if it's not actually valid ---
+if defined COMFY_DIR (
+    if not exist "!COMFY_DIR!\python_embeded\python.exe" (
+        echo [INFO] Hardcoded COMFY_DIR did not validate; running auto-detect...
+        set "COMFY_DIR="
+    )
+    if defined COMFY_DIR if not exist "!COMFY_DIR!\ComfyUI\main.py" (
+        echo [INFO] Hardcoded COMFY_DIR did not validate; running auto-detect...
+        set "COMFY_DIR="
+    )
+)
+
+REM --- 1. Try fixed candidate paths ---
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable_nvidia"
+if not defined COMFY_DIR call :find_comfy "C:\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\Users\%USERNAME%\Desktop\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\Users\%USERNAME%\Downloads\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\Users\%USERNAME%\Documents\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\Users\%USERNAME%\Desktop\Jc\Claude\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "C:\Users\%USERNAME%\Desktop\Jc\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "D:\ComfyUI_windows_portable"
+if not defined COMFY_DIR call :find_comfy "D:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable"
+
+REM --- 2. Recursive search across user-listed roots ---
 if not defined COMFY_DIR (
-    echo [ERROR] ComfyUI Portable was not found in any common location:
-    echo   C:\ComfyUI_windows_portable
-    echo   C:\Users\ongcz\Desktop\ComfyUI_windows_portable
-    echo   C:\Users\ongcz\Downloads\ComfyUI_windows_portable
-    echo   C:\Users\ongcz\Desktop\Jc\Claude\ComfyUI_windows_portable
-    echo   C:\Users\ongcz\Desktop\Jc\ComfyUI_windows_portable
-    echo   C:\ComfyUI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable
-    echo   C:\ComfyUI\ComfyUI_windows_portable
-    echo   C:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable
-    echo   C:\ComfyUI    (and a few drive-D variants)
+    echo Searching for ComfyUI Portable, this may take a moment...
+    for %%S in (
+        "C:\Users\%USERNAME%\Desktop"
+        "C:\Users\%USERNAME%\Downloads"
+        "C:\Users\%USERNAME%\Documents"
+        "C:\Users\%USERNAME%\Desktop\Jc"
+        "C:\Users\%USERNAME%\Desktop\Jc\Claude"
+        "C:\ComfyUI"
+    ) do (
+        if not defined COMFY_DIR call :deep_search "%%~S"
+    )
+)
+
+REM --- 3. Last resort: scan C:\ (slow; only if nothing else worked) ---
+if not defined COMFY_DIR (
+    echo Still searching, scanning C:\ for ComfyUI installations...
+    call :deep_search "C:\"
+)
+
+echo.
+
+REM --- If nothing was found, give up with a clear message ---
+if not defined COMFY_DIR (
+    echo [ERROR] ComfyUI Portable was not found anywhere on this PC.
     echo.
-    echo ComfyUI Portable was not found. Please locate the folder that
-    echo contains python_embeded and ComfyUI, then edit COMFY_DIR at the
-    echo top of this .bat file.
+    echo Please locate the folder that contains BOTH:
+    echo     python_embeded\python.exe
+    echo     ComfyUI\main.py
     echo.
-    echo Example:
+    echo Then edit the COMFY_DIR line at the top of this .bat file:
     echo     set "COMFY_DIR=C:\Path\To\Your\ComfyUI_windows_portable"
-    echo.
     pause
     exit /b 1
 )
 
-REM --- Validate the chosen ComfyUI folder (handles the manual-override case too) ---
+REM --- Final validation ---
 if not exist "%COMFY_DIR%\python_embeded\python.exe" (
     echo [ERROR] COMFY_DIR is set to:
     echo         %COMFY_DIR%
     echo but python_embeded\python.exe was not found there.
-    echo Edit COMFY_DIR at the top of this .bat to a valid ComfyUI Portable folder.
     pause
     exit /b 1
 )
@@ -82,7 +101,6 @@ if not exist "%COMFY_DIR%\ComfyUI\main.py" (
     echo [ERROR] COMFY_DIR is set to:
     echo         %COMFY_DIR%
     echo but ComfyUI\main.py was not found there.
-    echo Edit COMFY_DIR at the top of this .bat to a valid ComfyUI Portable folder.
     pause
     exit /b 1
 )
@@ -97,7 +115,7 @@ if not exist "%ANIMIKO_DIR%\package.json" (
     echo         %ANIMIKO_DIR%
     echo.
     echo Edit ANIMIKO_DIR at the top of this .bat file, or clone the project:
-    echo     cd C:\Users\ongcz\Desktop\Jc\Claude
+    echo     cd C:\Users\%USERNAME%\Desktop\Jc\Claude
     echo     git clone https://github.com/JPODesign/local-ai-animation-studio.git animiko-local
     pause
     exit /b 1
@@ -142,9 +160,38 @@ exit /b 0
 
 REM ====================== Subroutines ======================
 
-REM Checks if %~1 is a valid ComfyUI Portable folder, and if so sets COMFY_DIR.
+REM :find_comfy <candidate>
+REM   Sets COMFY_DIR to %~1 if it contains both python_embeded\python.exe
+REM   and ComfyUI\main.py.
 :find_comfy
+if defined COMFY_DIR goto :eof
 if not exist "%~1\python_embeded\python.exe" goto :eof
 if not exist "%~1\ComfyUI\main.py" goto :eof
 set "COMFY_DIR=%~1"
+goto :eof
+
+REM :deep_search <root>
+REM   Recursively scans <root> for any "ComfyUI\main.py" file and, for each
+REM   one found, validates that the grandparent folder also has
+REM   python_embeded\python.exe (i.e. is a real ComfyUI Portable install).
+REM   Stops at the first valid match.
+:deep_search
+if defined COMFY_DIR goto :eof
+if not exist "%~1" goto :eof
+for /f "usebackq delims=" %%F in (`dir /b /s "%~1\main.py" 2^>nul ^| findstr /i /c:"\ComfyUI\main.py"`) do (
+    if not defined COMFY_DIR call :promote_to_root "%%F"
+)
+goto :eof
+
+REM :promote_to_root <path\to\ComfyUI\main.py>
+REM   Computes the grandparent directory of the given main.py and feeds it
+REM   to :find_comfy.
+:promote_to_root
+if defined COMFY_DIR goto :eof
+REM %~dp1 is "...\ComfyUI\" — strip trailing backslash, then take its parent.
+set "_dp=%~dp1"
+if "!_dp:~-1!"=="\" set "_dp=!_dp:~0,-1!"
+for %%X in ("!_dp!") do set "_root=%%~dpX"
+if "!_root:~-1!"=="\" set "_root=!_root:~0,-1!"
+call :find_comfy "!_root!"
 goto :eof
